@@ -6,15 +6,15 @@ echo ==========================
 cd /d "%~dp0"
 
 echo.
-echo Adding files...
 git add .
 
-echo.
 set /p msg=Enter commit message: 
 
-echo.
-echo Committing...
 git commit -m "%msg%"
+
+echo.
+echo Pulling latest changes...
+git pull origin main --rebase
 
 echo.
 echo Pushing to origin main...

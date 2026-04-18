@@ -17,6 +17,5 @@ private:
     HWND hwnd;
     HDC hdc;
     HGLRC hrc;
-
     bool running;
 };

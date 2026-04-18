@@ -6,6 +6,7 @@ class Sound
 {
 public:
     Sound();
+    ~Sound();
 
     bool load(const char* path);
     void play(bool loop = false);
@@ -13,4 +14,6 @@ public:
 
 private:
     std::string file;
+    std::string alias;
+    static int counter;
 };

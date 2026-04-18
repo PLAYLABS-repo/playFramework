@@ -6,9 +6,6 @@ static LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
     switch (msg)
     {
         case WM_CLOSE:
-            PostQuitMessage(0);
-            return 0;
-
         case WM_DESTROY:
             PostQuitMessage(0);
             return 0;
@@ -16,13 +13,7 @@ static LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
     return DefWindowProc(hwnd, msg, wParam, lParam);
 }
 
-Window::Window()
-{
-    hwnd = nullptr;
-    hdc = nullptr;
-    hrc = nullptr;
-    running = false;
-}
+Window::Window() : hwnd(nullptr), hdc(nullptr), hrc(nullptr), running(false) {}
 
 Window::~Window()
 {
@@ -45,8 +36,10 @@ bool Window::create(const char* title, int width, int height)
     wc.lpfnWndProc = WindowProc;
     wc.hInstance = GetModuleHandle(nullptr);
     wc.lpszClassName = "playFrameworkWindow";
+    wc.hCursor = LoadCursor(NULL, IDC_ARROW);
 
-    RegisterClass(&wc);
+    if (!RegisterClass(&wc))
+        return false;
 
     hwnd = CreateWindowEx(
         0,
@@ -55,51 +48,55 @@ bool Window::create(const char* title, int width, int height)
         WS_OVERLAPPEDWINDOW | WS_VISIBLE,
         CW_USEDEFAULT, CW_USEDEFAULT,
         width, height,
-        nullptr,
-        nullptr,
+        nullptr, nullptr,
         wc.hInstance,
         nullptr
     );
 
-    if (!hwnd)
-        return false;
+    if (!hwnd) return false;
 
     hdc = GetDC(hwnd);
 
-    // basic pixel format (simple legacy OpenGL)
     PIXELFORMATDESCRIPTOR pfd = {};
     pfd.nSize = sizeof(pfd);
     pfd.nVersion = 1;
     pfd.dwFlags = PFD_DRAW_TO_WINDOW | PFD_SUPPORT_OPENGL | PFD_DOUBLEBUFFER;
     pfd.iPixelType = PFD_TYPE_RGBA;
     pfd.cColorBits = 32;
-    pfd.cDepthBits = 24;
-    pfd.iLayerType = PFD_MAIN_PLANE;
 
     int pf = ChoosePixelFormat(hdc, &pfd);
-    SetPixelFormat(hdc, pf, &pfd);
+    if (!pf) return false;
+
+    if (!SetPixelFormat(hdc, pf, &pfd))
+        return false;
 
     hrc = wglCreateContext(hdc);
     wglMakeCurrent(hdc, hrc);
 
+    glEnable(GL_TEXTURE_2D);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+
+    glMatrixMode(GL_PROJECTION);
+    glLoadIdentity();
+    glOrtho(0, width, height, 0, -1, 1);
+
+    glMatrixMode(GL_MODELVIEW);
+    glLoadIdentity();
+
+    glClearColor(0.2f, 0.2f, 0.2f, 1.0f);
+
     running = true;
-
-    glClearColor(0.1f, 0.1f, 0.1f, 1.0f);
-
     return true;
 }
 
 bool Window::process()
 {
     MSG msg;
-
     while (PeekMessage(&msg, nullptr, 0, 0, PM_REMOVE))
     {
         if (msg.message == WM_QUIT)
-        {
-            running = false;
-            return false;
-        }
+            return (running = false);
 
         TranslateMessage(&msg);
         DispatchMessage(&msg);
@@ -108,12 +105,5 @@ bool Window::process()
     return running;
 }
 
-HWND Window::getHWND() const
-{
-    return hwnd;
-}
-
-HDC Window::getHDC() const
-{
-    return hdc;
-}
+HWND Window::getHWND() const { return hwnd; }
+HDC Window::getHDC() const { return hdc; }

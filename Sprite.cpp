@@ -1,86 +1,71 @@
 #include "Sprite.h"
+#include "Image.h"
+#include "Atlas.h"
+#include "Camera.h"
+
 #include <GL/gl.h>
-#include <math.h>
-
-Sprite::Sprite()
-{
-    position = Vec2(0, 0);
-    scale = Vec2(1, 1);
-
-    rotation = 0.0f;
-
-    skewX = 0.0f;
-    skewY = 0.0f;
-
-    alpha = 1.0f;
-
-    image = nullptr;
-    atlas = nullptr;
-
-    frameName = "0000";
-}
-
-Sprite::~Sprite()
-{
-}
 
 void Sprite::draw(Camera& cam)
 {
-    if (!image || !atlas) return;
+    if (!image) return;
 
-    Frame f = atlas->get(frameName);
+    glEnable(GL_TEXTURE_2D);
+    glBindTexture(GL_TEXTURE_2D, image->textureID);
 
-    float texW = (float)image->w;
-    float texH = (float)image->h;
-
-    float u0 = f.x / texW;
-    float v0 = f.y / texH;
-    float u1 = (f.x + f.w) / texW;
-    float v1 = (f.y + f.h) / texH;
-
-    float w = f.w * scale.x;
-    float h = f.h * scale.y;
-
-    float c = cos(rotation);
-    float s = sin(rotation);
-
-    // enable alpha
+    // ✅ Alpha
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
     glColor4f(1.0f, 1.0f, 1.0f, alpha);
 
-    glEnable(GL_TEXTURE_2D);
-    glBindTexture(GL_TEXTURE_2D, image->tex);
+    float x = position.x;
+    float y = position.y;
+
+    float w = image->width * scale.x;
+    float h = image->height * scale.y;
+
+    float u1 = 0.0f, v1 = 0.0f;
+    float u2 = 1.0f, v2 = 1.0f;
+
+    // ✅ ATLAS CUT
+    if (atlas && !frameName.empty())
+    {
+        Frame f = atlas->get(frameName);
+
+        u1 = f.x / (float)image->width;
+        v1 = f.y / (float)image->height;
+        u2 = (f.x + f.w) / (float)image->width;
+        v2 = (f.y + f.h) / (float)image->height;
+
+        w = f.w * scale.x;
+        h = f.h * scale.y;
+    }
+
+    glPushMatrix();
+
+    // ✅ Correct transform order (NO duplicates)
+    glTranslatef(x, y, 0);
+    glRotatef(rotation, 0, 0, 1);
+
+    // ✅ Skew
+    float skewMatrix[16] = {
+        1,        skewY,   0, 0,
+        skewX,    1,       0, 0,
+        0,        0,       1, 0,
+        0,        0,       0, 1
+    };
+    glMultMatrixf(skewMatrix);
 
     glBegin(GL_QUADS);
 
-    auto vtx = [&](float x, float y, float u, float v)
-    {
-        // skew
-        float sx = x + y * skewX;
-        float sy = y + x * skewY;
-
-        // rotate
-        float rx = sx * c - sy * s;
-        float ry = sx * s + sy * c;
-
-        // world
-        Vec2 world(position.x + rx, position.y + ry);
-
-        // camera
-        Vec2 screen = cam.worldToScreen(world);
-
-        glTexCoord2f(u, v);
-        glVertex2f(screen.x, screen.y);
-    };
-
-    vtx(0, 0, u0, v0);
-    vtx(w, 0, u1, v0);
-    vtx(w, h, u1, v1);
-    vtx(0, h, u0, v1);
+    glTexCoord2f(u1, v1); glVertex2f(-w / 2, -h / 2);
+    glTexCoord2f(u2, v1); glVertex2f( w / 2, -h / 2);
+    glTexCoord2f(u2, v2); glVertex2f( w / 2,  h / 2);
+    glTexCoord2f(u1, v2); glVertex2f(-w / 2,  h / 2);
 
     glEnd();
 
-    // reset color (IMPORTANT)
-    glColor4f(1, 1, 1, 1);
+    glPopMatrix();
+
+    glDisable(GL_BLEND);
+    glDisable(GL_TEXTURE_2D);
 }

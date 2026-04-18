@@ -1,30 +1,51 @@
 #include "Sound.h"
 #include <mmsystem.h>
+#include <stdio.h>
 
 #pragma comment(lib, "winmm.lib")
 
+int Sound::counter = 0;
+
 Sound::Sound()
 {
+    alias = "snd_" + std::to_string(counter++);
+}
+
+Sound::~Sound()
+{
+    stop();
 }
 
 bool Sound::load(const char* path)
 {
+    if (!path) return false;
+
     file = path;
     return true;
 }
 
 void Sound::play(bool loop)
 {
-    if (file.empty()) return;
+    std::string closeCmd = "close " + alias;
+    mciSendStringA(closeCmd.c_str(), NULL, 0, NULL);
 
-    PlaySoundA(
-        file.c_str(),
-        NULL,
-        SND_FILENAME | SND_ASYNC | (loop ? SND_LOOP : 0)
-    );
+    std::string openCmd =
+        "open \"" + file + "\" type waveaudio alias " + alias;
+
+    mciSendStringA(openCmd.c_str(), NULL, 0, NULL);
+
+    std::string playCmd =
+        "play " + alias + (loop ? " repeat" : "");
+
+    mciSendStringA(playCmd.c_str(), NULL, 0, NULL);
 }
-
 void Sound::stop()
 {
-    PlaySoundA(NULL, 0, 0);
+    if (alias.empty()) return;
+
+    std::string cmd = "stop " + alias;
+    mciSendStringA(cmd.c_str(), NULL, 0, NULL);
+
+    cmd = "close " + alias;
+    mciSendStringA(cmd.c_str(), NULL, 0, NULL);
 }

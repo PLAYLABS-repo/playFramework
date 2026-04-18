@@ -1,15 +1,24 @@
 #include "Camera.h"
+#include <GL/gl.h>
 
-Camera::Camera()
+void Camera::apply(int screenWidth, int screenHeight)
 {
-    pos = Vec2(0, 0);
-    zoom = 1.0f;
-}
+    glMatrixMode(GL_PROJECTION);
+    glLoadIdentity();
 
-Vec2 Camera::worldToScreen(Vec2 world)
-{
-    Vec2 r;
-    r.x = (world.x - pos.x) * zoom;
-    r.y = (world.y - pos.y) * zoom;
-    return r;
+    // center-based camera
+    float halfW = (float)screenWidth * 0.5f / zoom;
+    float halfH = (float)screenHeight * 0.5f / zoom;
+
+    glOrtho(
+        position.x - halfW,
+        position.x + halfW,
+        position.y + halfH,
+        position.y - halfH,
+        -1.0f,
+        1.0f
+    );
+
+    glMatrixMode(GL_MODELVIEW);
+    glLoadIdentity();
 }

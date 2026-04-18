@@ -4,10 +4,8 @@
 class Camera
 {
 public:
-    Vec2 pos;
-    float zoom;
+    Vec2 position = {0.0f, 0.0f};
+    float zoom = 1.0f;
 
-    Camera();
-
-    Vec2 worldToScreen(Vec2 world);
+    void apply(int screenWidth, int screenHeight);
 };

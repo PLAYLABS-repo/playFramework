@@ -148,60 +148,57 @@ void TimelineAnimator::updateAndDraw(float dt, Image* img, Atlas* atlas, Camera&
     {
         glPushMatrix();
 
-        glBindTexture(GL_TEXTURE_2D, img->textureID);
+glBindTexture(GL_TEXTURE_2D, img->textureID);
 
-        // =========================
-        // ATLAS FRAME
-        // =========================
-        float u1 = 0, v1 = 0, u2 = 1, v2 = 1;
-        float w = 64, h = 64;
+// =========================
+// ATLAS
+// =========================
+float u1 = 0, v1 = 0, u2 = 1, v2 = 1;
+float w = 64, h = 64;
 
-        if (atlas)
-        {
-            Frame f;
-            if (atlas->get(e.frame, f))
-            {
-                u1 = f.x / (float)img->width;
-                v1 = f.y / (float)img->height;
-                u2 = (f.x + f.w) / (float)img->width;
-                v2 = (f.y + f.h) / (float)img->height;
+if (atlas)
+{
+    Frame f;
+    if (atlas->get(e.frame, f))
+    {
+        u1 = f.x / (float)img->width;
+        v1 = f.y / (float)img->height;
+        u2 = (f.x + f.w) / (float)img->width;
+        v2 = (f.y + f.h) / (float)img->height;
 
-                w = f.w;
-                h = f.h;
-            }
-        }
+        w = f.w;
+        h = f.h;
+    }
+}
 
-        // =========================
-        // STEP 1: MOVE TO WORLD POS
-        // =========================
-        glTranslatef(e.x, e.y, 0);
+// =========================
+// MOVE TO POSITION
+// =========================
+glTranslatef(e.x, e.y, 0);
 
-        // =========================
-        // STEP 2: MOVE TO PIVOT CENTER FIRST
-        // =========================
-        glTranslatef(e.pivotX, e.pivotY, 0);
+// =========================
+// ROTATE AROUND PIVOT (FIXED, NO DOUBLE OFFSET)
+// =========================
+glTranslatef(e.pivotX, e.pivotY, 0);
+glRotatef(e.rotation, 0, 0, 1);
+glTranslatef(-e.pivotX, -e.pivotY, 0);
 
-        // =========================
-        // STEP 3: ROTATE (THIS MUST BE VISIBLE NOW)
-        // =========================
-        glRotatef(e.rotation, 0, 0, 1);
+// =========================
+// DRAW CENTERED QUAD
+// =========================
+float hw = (w * 0.5f) * e.sx;
+float hh = (h * 0.5f) * e.sy;
 
-        // =========================
-        // STEP 4: DRAW FROM CENTER (IMPORTANT)
-        // =========================
-        float hw = (w * 0.5f) * e.sx;
-        float hh = (h * 0.5f) * e.sy;
+glBegin(GL_QUADS);
 
-        glBegin(GL_QUADS);
+glTexCoord2f(u1, v1); glVertex2f(-hw, -hh);
+glTexCoord2f(u2, v1); glVertex2f( hw, -hh);
+glTexCoord2f(u2, v2); glVertex2f( hw,  hh);
+glTexCoord2f(u1, v2); glVertex2f(-hw,  hh);
 
-        glTexCoord2f(u1, v1); glVertex2f(-hw, -hh);
-        glTexCoord2f(u2, v1); glVertex2f( hw, -hh);
-        glTexCoord2f(u2, v2); glVertex2f( hw,  hh);
-        glTexCoord2f(u1, v2); glVertex2f(-hw,  hh);
+glEnd();
 
-        glEnd();
-
-        glPopMatrix();
+glPopMatrix();
     }
 
     glDisable(GL_BLEND);

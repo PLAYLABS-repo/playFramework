@@ -4,7 +4,10 @@
 
 struct Frame
 {
-    float x, y, w, h;
+    float x = 0;
+    float y = 0;
+    float w = 0;
+    float h = 0;
 };
 
 class Atlas
@@ -13,5 +16,6 @@ public:
     std::map<std::string, Frame> frames;
 
     bool load(const char* path);
-    Frame get(const std::string& name);
+
+    bool get(const std::string& name, Frame& out) const;
 };

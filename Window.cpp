@@ -1,19 +1,38 @@
 #include "Window.h"
 #include <GL/gl.h>
 
+static Window* g_window = nullptr;
+
 static LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 {
     switch (msg)
     {
+        case WM_SIZE:
+        {
+            if (g_window)
+            {
+                int w = LOWORD(lParam);
+                int h = HIWORD(lParam);
+
+                g_window->setSize(w, h); // ✅ FIXED
+                glViewport(0, 0, w, h);
+            }
+            return 0;
+        }
+
         case WM_CLOSE:
         case WM_DESTROY:
             PostQuitMessage(0);
             return 0;
     }
+
     return DefWindowProc(hwnd, msg, wParam, lParam);
 }
 
-Window::Window() : hwnd(nullptr), hdc(nullptr), hrc(nullptr), running(false) {}
+Window::Window()
+    : hwnd(nullptr), hdc(nullptr), hrc(nullptr),
+      running(false), width(0), height(0)
+{}
 
 Window::~Window()
 {
@@ -30,16 +49,20 @@ Window::~Window()
         DestroyWindow(hwnd);
 }
 
-bool Window::create(const char* title, int width, int height)
+bool Window::create(const char* title, int w, int h)
 {
+    width = w;
+    height = h;
+
+    g_window = this;
+
     WNDCLASS wc = {};
     wc.lpfnWndProc = WindowProc;
     wc.hInstance = GetModuleHandle(nullptr);
     wc.lpszClassName = "playFrameworkWindow";
     wc.hCursor = LoadCursor(NULL, IDC_ARROW);
 
-    if (!RegisterClass(&wc))
-        return false;
+    RegisterClass(&wc);
 
     hwnd = CreateWindowEx(
         0,
@@ -77,12 +100,7 @@ bool Window::create(const char* title, int width, int height)
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 
-    glMatrixMode(GL_PROJECTION);
-    glLoadIdentity();
-    glOrtho(0, width, height, 0, -1, 1);
-
-    glMatrixMode(GL_MODELVIEW);
-    glLoadIdentity();
+    glViewport(0, 0, width, height); // ✅ important
 
     glClearColor(0.2f, 0.2f, 0.2f, 1.0f);
 
@@ -107,3 +125,12 @@ bool Window::process()
 
 HWND Window::getHWND() const { return hwnd; }
 HDC Window::getHDC() const { return hdc; }
+
+int Window::getWidth() const { return width; }
+int Window::getHeight() const { return height; }
+
+void Window::setSize(int w, int h)
+{
+    width = w;
+    height = h;
+}

@@ -1,6 +1,7 @@
 #pragma once
 #include <string>
 #include "Vec2.h"
+#include "AABB.h"
 
 class Image;
 class Atlas;
@@ -14,14 +15,37 @@ public:
 
     std::string frameName;
 
-    Vec2 position;
-    Vec2 scale = {1.0f, 1.0f};
-
+    // =========================
+    // CURRENT TRANSFORM
+    // =========================
+    Vec2 position = {0, 0};
+    Vec2 scale = {1, 1};
     float rotation = 0.0f;
+
     float skewX = 0.0f;
     float skewY = 0.0f;
+    float alpha = 1.0f;
 
-    float alpha = 1.0f; // ✅ transparency (0 = invisible, 1 = solid)
+    // =========================
+    // TARGET TRANSFORM (LINEAR MOVE)
+    // =========================
+    Vec2 targetPosition = {0, 0};
+    Vec2 targetScale = {1, 1};
+    float targetRotation = 0.0f;
 
+    float moveSpeed = 400.0f;
+    float scaleSpeed = 6.0f;
+    float rotateSpeed = 6.0f;
+
+    // =========================
+    // API
+    // =========================
+    void moveTo(float x, float y);
+    void scaleTo(float w, float h);
+    void rotateTo(float degrees);
+
+    void update(float dt);
+
+    AABB getAABB() const;
     void draw(Camera& cam);
 };

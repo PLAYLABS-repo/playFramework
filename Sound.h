@@ -15,5 +15,6 @@ public:
 private:
     std::string file;
     std::string alias;
+    bool opened;              // <-- REQUIRED FIX
     static int counter;
 };

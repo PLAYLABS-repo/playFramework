@@ -7,18 +7,16 @@
 #include <cmath>
 
 // =========================
-// MOVE TARGET
+// MOVE
 // =========================
 void Sprite::moveTo(float x, float y)
 {
-    targetPosition.x = x;
-    targetPosition.y = y;
+    targetPosition = {x, y};
 }
 
 void Sprite::scaleTo(float w, float h)
 {
-    targetScale.x = w;
-    targetScale.y = h;
+    targetScale = {w, h};
 }
 
 void Sprite::rotateTo(float degrees)
@@ -27,14 +25,13 @@ void Sprite::rotateTo(float degrees)
 }
 
 // =========================
-// LINEAR UPDATE (NO EASING)
+// UPDATE (LINEAR)
 // =========================
 void Sprite::update(float dt)
 {
-    // ---------- POSITION ----------
+    // POSITION
     float dx = targetPosition.x - position.x;
     float dy = targetPosition.y - position.y;
-
     float dist = sqrtf(dx * dx + dy * dy);
 
     if (dist > 0.001f)
@@ -42,9 +39,7 @@ void Sprite::update(float dt)
         float step = moveSpeed * dt;
 
         if (step >= dist)
-        {
             position = targetPosition;
-        }
         else
         {
             position.x += (dx / dist) * step;
@@ -52,10 +47,9 @@ void Sprite::update(float dt)
         }
     }
 
-    // ---------- SCALE ----------
+    // SCALE
     float sx = targetScale.x - scale.x;
     float sy = targetScale.y - scale.y;
-
     float sDist = sqrtf(sx * sx + sy * sy);
 
     if (sDist > 0.001f)
@@ -63,9 +57,7 @@ void Sprite::update(float dt)
         float step = scaleSpeed * dt;
 
         if (step >= sDist)
-        {
             scale = targetScale;
-        }
         else
         {
             scale.x += (sx / sDist) * step;
@@ -73,7 +65,7 @@ void Sprite::update(float dt)
         }
     }
 
-    // ---------- ROTATION ----------
+    // ROTATION
     float r = targetRotation - rotation;
 
     if (fabs(r) > 0.01f)
@@ -81,18 +73,14 @@ void Sprite::update(float dt)
         float step = rotateSpeed * dt;
 
         if (step >= fabs(r))
-        {
             rotation = targetRotation;
-        }
         else
-        {
             rotation += (r > 0 ? 1 : -1) * step;
-        }
     }
 }
 
 // =========================
-// AABB COLLISION
+// AABB (pivot-aware)
 // =========================
 AABB Sprite::getAABB() const
 {
@@ -112,16 +100,15 @@ AABB Sprite::getAABB() const
         }
     }
 
-    return AABB(
-        position.x - w * 0.5f,
-        position.y - h * 0.5f,
-        w,
-        h
-    );
+    // pivot shifts the box
+    float left = position.x - pivot.x;
+    float top  = position.y - pivot.y;
+
+    return AABB(left, top, w, h);
 }
 
 // =========================
-// DRAW
+// DRAW (CORRECT PIVOT PIPELINE)
 // =========================
 void Sprite::draw(Camera& cam)
 {
@@ -133,9 +120,6 @@ void Sprite::draw(Camera& cam)
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
     glColor4f(1, 1, 1, alpha);
-
-    float x = position.x;
-    float y = position.y;
 
     float w = image->width * scale.x;
     float h = image->height * scale.y;
@@ -159,9 +143,26 @@ void Sprite::draw(Camera& cam)
 
     glPushMatrix();
 
-    glTranslatef(x, y, 0);
-    glRotatef(rotation, 0, 0, 1);
+    // =========================
+    // WORLD POSITION
+    // =========================
+    glTranslatef(position.x, position.y, 0);
 
+    // =========================
+    // APPLY PIVOT (FLASH STYLE)
+    // =========================
+    glTranslatef(-pivot.x, -pivot.y, 0);
+
+    // =========================
+    // ROTATE AROUND PIVOT
+    // =========================
+    glTranslatef(pivot.x, pivot.y, 0);
+    glRotatef(rotation, 0, 0, 1);
+    glTranslatef(-pivot.x, -pivot.y, 0);
+
+    // =========================
+    // SKEW
+    // =========================
     float skewMatrix[16] =
     {
         1, skewY, 0, 0,
@@ -172,12 +173,15 @@ void Sprite::draw(Camera& cam)
 
     glMultMatrixf(skewMatrix);
 
+    // =========================
+    // DRAW (TOP-LEFT SPACE)
+    // =========================
     glBegin(GL_QUADS);
 
-    glTexCoord2f(u1, v1); glVertex2f(-w / 2, -h / 2);
-    glTexCoord2f(u2, v1); glVertex2f( w / 2, -h / 2);
-    glTexCoord2f(u2, v2); glVertex2f( w / 2,  h / 2);
-    glTexCoord2f(u1, v2); glVertex2f(-w / 2,  h / 2);
+    glTexCoord2f(u1, v1); glVertex2f(0, 0);
+    glTexCoord2f(u2, v1); glVertex2f(w, 0);
+    glTexCoord2f(u2, v2); glVertex2f(w, h);
+    glTexCoord2f(u1, v2); glVertex2f(0, h);
 
     glEnd();
 

@@ -74,6 +74,8 @@ int main()
         if (Input::isKeyDown(VK_UP))    cam.position.y -= camSpeed;
         if (Input::isKeyDown(VK_DOWN))  cam.position.y += camSpeed;
 
+
+
         // =========================
         // APPLY CAMERA
         // =========================

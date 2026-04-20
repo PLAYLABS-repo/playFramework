@@ -16,7 +16,7 @@ public:
     std::string frameName;
 
     // =========================
-    // CURRENT TRANSFORM
+    // TRANSFORM
     // =========================
     Vec2 position = {0, 0};
     Vec2 scale = {1, 1};
@@ -24,10 +24,14 @@ public:
 
     float skewX = 0.0f;
     float skewY = 0.0f;
+
     float alpha = 1.0f;
 
+    // 🔥 REAL PIVOT (FROM TIMELINE)
+    Vec2 pivot = {0, 0};
+
     // =========================
-    // TARGET TRANSFORM (LINEAR MOVE)
+    // TARGETS (LINEAR)
     // =========================
     Vec2 targetPosition = {0, 0};
     Vec2 targetScale = {1, 1};
@@ -37,8 +41,6 @@ public:
     float scaleSpeed = 6.0f;
     float rotateSpeed = 6.0f;
 
-    // =========================
-    // API
     // =========================
     void moveTo(float x, float y);
     void scaleTo(float w, float h);

@@ -5,6 +5,7 @@
 #include "Atlas.h"
 #include "TimelineAnimator.h"
 #include "Timer.h"
+#include "Sound.h"
 
 #include <GL/gl.h>
 #include <windows.h>
@@ -42,17 +43,27 @@ int main()
         return -1;
     }
 
+
+
     // =========================
     // CAMERA
     // =========================
     Camera cam;
     cam.position = Vec2(0, 0);
 
+
     // =========================
     // TIMER
     // =========================
+    Sound music;
+        if (!music.load("test.wav"))
+    {
+        MessageBoxA(NULL, "Failed to load sound!", "Error", MB_OK);
+        return 1;
+    }
     Timer timer;
 
+    music.play(true);
     // =========================
     // LOOP
     // =========================

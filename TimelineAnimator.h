@@ -1,39 +1,89 @@
 #pragma once
-#include <vector>
 #include <string>
+#include <vector>
 #include <map>
+#include "Vec2.h"
 
 class Image;
 class Atlas;
 class Camera;
 
-struct AnimElement
+// =========================
+// STRUCTS
+// =========================
+struct TA_Element
 {
-    std::string frame;    // atlas key e.g. "0005"
-    float x, y;          // world position of pivot (DecomposedMatrix Position)
-    float rotation;       // degrees (DecomposedMatrix Rotation z)
-    float sx, sy;         // scale (DecomposedMatrix Scaling)
-    float pivotX, pivotY; // unscaled pixel offset from sprite top-left (transformationPoint)
+    std::string spriteName;   // ATLAS_SPRITE_instance or bitmap name
+    std::string symbolName;   // SYMBOL_Instance name
+
+    Vec2  position  = {0, 0};
+    Vec2  bitmapOff = {0, 0}; // bitmap's own local offset inside symbol
+    Vec2  scale     = {1, 1};
+    float rotation  = 0.0f;   // radians (from DecomposedMatrix.Rotation.z)
+    Vec2  pivot     = {0, 0}; // transformationPoint (raw pixels)
+
+    // Graphic symbol playback
+    bool  isGraphic  = false;
+    int   firstFrame = 0;
+    bool  looping    = true;
 };
 
-struct AnimFrame
+struct TA_Frame
 {
-    std::vector<AnimElement> elements;
-    std::string label;        // named frame label e.g. "main", "emote"
-    bool isExplicit = false;
+    int index    = 0;
+    int duration = 1;
+    std::vector<TA_Element> elements;
 };
 
+struct TA_Layer
+{
+    std::vector<TA_Frame> frames;
+};
+
+struct TA_Timeline
+{
+    std::vector<TA_Layer> layers;
+    int totalFrames = 0;
+};
+
+// =========================
+// MAIN CLASS
+// =========================
 class TimelineAnimator
 {
 public:
-    bool load(const char* path, const std::string& symbolName);
-    void playAnimation(const std::string& label);
-    void updateAndDraw(float dt, Image* img, Atlas* atlas, Camera& cam);
+    bool load(const char* path);
+
+    // Play a named symbol e.g. play("PLAYER", "RUN") -> plays PLAYER_ANIM_RUN
+    void play(const std::string& entity, const std::string& animType);
+
+    void update(float dt);
+    void draw(Image* img, Atlas* atlas, Camera& cam);
+
+    int  currentFrame = 0;
+    int  totalFrames  = 0;
 
 private:
-    std::vector<AnimFrame>   frames;
-    std::map<std::string, int> labels;  // label name -> frame index
-    int   currentFrame = 0;
-    float time         = 0.0f;
-    float fps          = 24.0f;
+    std::map<std::string, TA_Timeline> symbols;
+    TA_Timeline* activeTimeline = nullptr;
+
+    float frameTimer = 0.0f;
+    float fps        = 24.0f;
+
+    void drawTimeline(
+        TA_Timeline& timeline,
+        Image*       img,
+        Atlas*       atlas,
+        Vec2         parentPos,
+        float        parentRot,  // radians
+        Vec2         parentScale,
+        int          frame
+    );
+
+    void drawSprite(
+        const std::string& name,
+        Image* img, Atlas* atlas,
+        Vec2 pos, float rotRad, Vec2 scale, Vec2 pivot,
+        Vec2 bitmapOff
+    );
 };

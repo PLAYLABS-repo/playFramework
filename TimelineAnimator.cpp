@@ -1,249 +1,385 @@
 #include "TimelineAnimator.h"
-#include "json.hpp"
-#include <fstream>
-#include <map>
-#include <algorithm>
-
-#include "Sprite.h"
 #include "Image.h"
 #include "Atlas.h"
 #include "Camera.h"
 
 #include <GL/gl.h>
+#include <fstream>
+#include <cmath>
+#include "json.hpp"
 
 using json = nlohmann::json;
 
-// ==========================
+// =========================
+// HELPERS
+// =========================
+static float safeFloat(const json& j, const char* key, float fallback = 0.0f)
+{
+    if (!j.contains(key) || j[key].is_null()) return fallback;
+    return j[key].get<float>();
+}
+
+static int safeInt(const json& j, const char* key, int fallback = 0)
+{
+    if (!j.contains(key) || j[key].is_null()) return fallback;
+    return j[key].get<int>();
+}
+
+static std::string safeString(const json& j, const char* key, const std::string& fallback = "")
+{
+    if (!j.contains(key) || j[key].is_null()) return fallback;
+    return j[key].get<std::string>();
+}
+
+// =========================
+// PARSE ELEMENT
+// Three element types found in this export:
+//   1. ATLAS_SPRITE_instance  — leaf sprite, position + name
+//   2. SYMBOL_Instance (with bitmap field) — leaf sprite wrapped in a symbol
+//      with its own DecomposedMatrix transform AND a local bitmap offset
+//   3. SYMBOL_Instance (no bitmap) — nested movieclip/graphic, recurse
+// =========================
+static TA_Element parseElement(const json& e)
+{
+    TA_Element el;
+
+    // --- Type 1: pure atlas sprite ---
+    if (e.contains("ATLAS_SPRITE_instance") && !e["ATLAS_SPRITE_instance"].is_null())
+    {
+        auto& sp = e["ATLAS_SPRITE_instance"];
+        el.spriteName = safeString(sp, "name");
+
+        if (sp.contains("Position") && !sp["Position"].is_null())
+        {
+            el.position.x = safeFloat(sp["Position"], "x");
+            el.position.y = safeFloat(sp["Position"], "y");
+        }
+        if (sp.contains("transformationPoint") && !sp["transformationPoint"].is_null())
+        {
+            el.pivot.x = safeFloat(sp["transformationPoint"], "x");
+            el.pivot.y = safeFloat(sp["transformationPoint"], "y");
+        }
+    }
+
+    // --- Type 2 & 3: SYMBOL_Instance ---
+    if (e.contains("SYMBOL_Instance") && !e["SYMBOL_Instance"].is_null())
+    {
+        auto& inst = e["SYMBOL_Instance"];
+
+        // Transform from DecomposedMatrix (position in pixels, rotation in radians)
+        if (inst.contains("DecomposedMatrix") && !inst["DecomposedMatrix"].is_null())
+        {
+            auto& dm = inst["DecomposedMatrix"];
+            if (dm.contains("Position") && !dm["Position"].is_null())
+            {
+                el.position.x = safeFloat(dm["Position"], "x");
+                el.position.y = safeFloat(dm["Position"], "y");
+            }
+            if (dm.contains("Scaling") && !dm["Scaling"].is_null())
+            {
+                el.scale.x = safeFloat(dm["Scaling"], "x", 1.0f);
+                el.scale.y = safeFloat(dm["Scaling"], "y", 1.0f);
+            }
+            if (dm.contains("Rotation") && !dm["Rotation"].is_null())
+            {
+                // Rotation.z is in RADIANS in this Animate export
+                el.rotation = safeFloat(dm["Rotation"], "z");
+            }
+        }
+
+        if (inst.contains("transformationPoint") && !inst["transformationPoint"].is_null())
+        {
+            el.pivot.x = safeFloat(inst["transformationPoint"], "x");
+            el.pivot.y = safeFloat(inst["transformationPoint"], "y");
+        }
+
+        // Type 2: has a "bitmap" field — this IS the leaf sprite, not a recursive symbol
+        // The bitmap has its own local offset relative to the symbol's pivot
+        if (inst.contains("bitmap") && !inst["bitmap"].is_null())
+        {
+            auto& bm = inst["bitmap"];
+            el.spriteName   = safeString(bm, "name");
+            el.bitmapOff.x  = safeFloat(bm.contains("Position") ? bm["Position"] : json{}, "x");
+            el.bitmapOff.y  = safeFloat(bm.contains("Position") ? bm["Position"] : json{}, "y");
+            // symbolName intentionally left empty — draw as sprite
+        }
+        else
+        {
+            // Type 3: pure nested symbol — recurse
+            el.symbolName = safeString(inst, "SYMBOL_name");
+
+            // Graphic symbols: parent drives which frame of child to show
+            std::string sType = safeString(inst, "symbolType");
+            if (sType == "graphic")
+            {
+                el.isGraphic  = true;
+                el.firstFrame = safeInt(inst, "firstFrame", 0);
+                std::string loop = safeString(inst, "loop", "loop");
+                el.looping    = (loop == "loop");
+            }
+        }
+    }
+
+    return el;
+}
+
+// =========================
+// PARSE LAYERS
+// Returns computed totalFrames (max index+duration seen)
+// =========================
+static int parseLayers(const json& timelineNode, TA_Timeline& out)
+{
+    int maxFrame = 0;
+    if (!timelineNode.contains("LAYERS")) return 1;
+
+    for (auto& layer : timelineNode["LAYERS"])
+    {
+        TA_Layer l;
+        if (!layer.contains("Frames")) continue;
+
+        for (auto& frame : layer["Frames"])
+        {
+            TA_Frame f;
+            f.index    = safeInt(frame, "index");
+            f.duration = safeInt(frame, "duration", 1);
+
+            int end = f.index + f.duration;
+            if (end > maxFrame) maxFrame = end;
+
+            if (frame.contains("elements") && frame["elements"].is_array())
+                for (auto& e : frame["elements"])
+                    f.elements.push_back(parseElement(e));
+
+            l.frames.push_back(f);
+        }
+        out.layers.push_back(l);
+    }
+
+    return maxFrame > 0 ? maxFrame : 1;
+}
+
+// =========================
 // LOAD
-// ==========================
-bool TimelineAnimator::load(const char* path, const std::string& symbolName)
+// =========================
+bool TimelineAnimator::load(const char* path)
 {
     std::ifstream file(path);
     if (!file.is_open()) return false;
 
     json j;
-    file >> j;
+    try { file >> j; }
+    catch (...) { return false; }
 
-    // Support both export formats from Adobe Animate:
-    // - "ANIMATION" (single symbol / stage export) <-- your file uses this
-    // - "SYMBOL_DICTIONARY" (multi-symbol export)
-    json targetTimeline;
-    bool found = false;
+    if (!j.contains("SYMBOL_DICTIONARY")) return false;
+    if (!j["SYMBOL_DICTIONARY"].contains("Symbols")) return false;
 
-    if (j.contains("ANIMATION") && j["ANIMATION"]["SYMBOL_name"] == symbolName)
+    for (auto& sym : j["SYMBOL_DICTIONARY"]["Symbols"])
     {
-        targetTimeline = j["ANIMATION"]["TIMELINE"];
-        found = true;
-    }
-    else if (j.contains("SYMBOL_DICTIONARY"))
-    {
-        for (auto& sym : j["SYMBOL_DICTIONARY"]["Symbols"])
-        {
-            if (sym["SYMBOL_name"] == symbolName)
-            {
-                targetTimeline = sym["TIMELINE"];
-                found = true;
-                break;
-            }
-        }
+        std::string symName = safeString(sym, "SYMBOL_name");
+        if (symName.empty()) continue;
+
+        TA_Timeline t;
+        if (sym.contains("TIMELINE") && !sym["TIMELINE"].is_null())
+            t.totalFrames = parseLayers(sym["TIMELINE"], t);
+        else
+            t.totalFrames = 1;
+
+        symbols[symName] = std::move(t);
     }
 
-    if (!found) return false;
-
-    auto& layers = targetTimeline["LAYERS"];
-    std::vector<std::map<int, AnimFrame>> layerTimelines;
-    int globalMax = 0;
-
-    for (auto& layer : layers)
+    // Default: play the first ANIM symbol found
+    for (auto it = symbols.begin(); it != symbols.end(); ++it)
     {
-        std::map<int, AnimFrame> timeline;
-
-        for (auto& f : layer["Frames"])
+        if (it->first.find("_ANIM_") != std::string::npos)
         {
-            int index    = f["index"];
-            int duration = f["duration"];
-
-            AnimFrame frame;
-            frame.isExplicit = true;
-
-            // Parse named frame label (e.g. "main", "emote")
-            if (f.contains("name"))
-                frame.label = f["name"];
-
-            if (f.contains("elements") && !f["elements"].empty())
-            {
-                for (auto& el : f["elements"])
-                {
-                    if (!el.contains("SYMBOL_Instance")) continue;
-                    auto& inst = el["SYMBOL_Instance"];
-                    if (!inst.contains("bitmap")) continue;
-
-                    AnimElement e;
-                    e.frame = inst["bitmap"]["name"];
-
-                    auto& d    = inst["DecomposedMatrix"];
-                    e.x        = d["Position"]["x"];
-                    e.y        = d["Position"]["y"];
-                    e.rotation = d["Rotation"]["z"];
-                    e.sx       = d["Scaling"]["x"];
-                    e.sy       = d["Scaling"]["y"];
-
-                    // transformationPoint: pixel offset from sprite top-left (unscaled)
-                    e.pivotX = inst["transformationPoint"]["x"];
-                    e.pivotY = inst["transformationPoint"]["y"];
-
-                    frame.elements.push_back(e);
-                }
-            }
-
-            for (int i = 0; i < duration; i++)
-            {
-                timeline[index + i] = frame;
-                globalMax = std::max(globalMax, index + i);
-            }
+            activeTimeline = &it->second;
+            totalFrames    = activeTimeline->totalFrames;
+            break;
         }
-
-        // Fill gaps by holding previous keyframe
-        for (int i = 1; i <= globalMax; i++)
-        {
-            if (!timeline.count(i) && timeline.count(i - 1))
-            {
-                timeline[i]            = timeline[i - 1];
-                timeline[i].isExplicit = false;
-                timeline[i].label      = "";
-            }
-        }
-
-        layerTimelines.push_back(timeline);
-    }
-
-    frames.resize(globalMax + 1);
-
-    for (int i = 0; i <= globalMax; i++)
-    {
-        AnimFrame finalFrame;
-        for (auto& lt : layerTimelines)
-        {
-            if (!lt.count(i)) continue;
-            const AnimFrame& f = lt.at(i);
-
-            // Carry label from any layer that has one at this index
-            if (!f.label.empty())
-                finalFrame.label = f.label;
-
-            if (f.isExplicit)
-            {
-                finalFrame.elements.insert(
-                    finalFrame.elements.end(),
-                    f.elements.begin(),
-                    f.elements.end()
-                );
-            }
-        }
-        frames[i] = finalFrame;
-
-        // Register label -> frame index
-        if (!frames[i].label.empty())
-            labels[frames[i].label] = i;
     }
 
     return true;
 }
 
-// ==========================
-// PLAY ANIMATION BY LABEL
-// ==========================
-void TimelineAnimator::playAnimation(const std::string& label)
+// =========================
+// PLAY  e.g. play("PLAYER","RUN") → PLAYER_ANIM_RUN
+// =========================
+void TimelineAnimator::play(const std::string& entity, const std::string& animType)
 {
-    if (label.empty())
-    {
-        currentFrame = 0;
-        return;
-    }
-    auto it = labels.find(label);
-    if (it != labels.end())
-        currentFrame = it->second;
+    std::string key = entity + "_ANIM_" + animType;
+
+    auto it = symbols.find(key);
+    if (it == symbols.end()) return;
+
+    activeTimeline = &it->second;
+    totalFrames    = activeTimeline->totalFrames;
+    currentFrame   = 0;
+    frameTimer     = 0.0f;
 }
 
-// ==========================
-// DRAW
-// ==========================
-void TimelineAnimator::updateAndDraw(float dt, Image* img, Atlas* atlas, Camera& cam)
+// =========================
+// UPDATE
+// =========================
+void TimelineAnimator::update(float dt)
 {
-    if (frames.empty()) return;
+    if (!activeTimeline) return;
 
-    time += dt;
-    currentFrame = (int)(time * fps) % (int)frames.size();
+    frameTimer += dt;
+    if (frameTimer >= 1.0f / fps)
+    {
+        frameTimer = 0.0f;
+        currentFrame++;
+        if (currentFrame >= totalFrames)
+            currentFrame = 0;
+    }
+}
 
-    auto& frame = frames[currentFrame];
+// =========================
+// DRAW ENTRY
+// =========================
+void TimelineAnimator::draw(Image* img, Atlas* atlas, Camera& cam)
+{
+    if (!activeTimeline) return;
 
-    glEnable(GL_TEXTURE_2D);
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-    glBindTexture(GL_TEXTURE_2D, img->textureID);
+    glColor4f(1, 1, 1, 1);
 
-    for (auto& e : frame.elements)
-    {
-        glPushMatrix();
-
-        // --------------------------------------------------
-        // Get atlas frame UVs + unscaled pixel size
-        // --------------------------------------------------
-        float u1 = 0, v1 = 0, u2 = 1, v2 = 1;
-        float w = 64, h = 64;
-
-        if (atlas)
-        {
-            Frame f;
-            if (atlas->get(e.frame, f))
-            {
-                float iw = (float)img->width;
-                float ih = (float)img->height;
-                u1 = f.x / iw;
-                v1 = f.y / ih;
-                u2 = (f.x + f.w) / iw;
-                v2 = (f.y + f.h) / ih;
-                w  = f.w;
-                h  = f.h;
-            }
-        }
-
-        // --------------------------------------------------
-        // In Adobe Animate's DecomposedMatrix, Position (x,y)
-        // is the WORLD position of the element's pivot point.
-        // transformationPoint is the pivot offset in LOCAL
-        // (unscaled) pixel space from the sprite's top-left.
-        //
-        // Since Position already encodes where the pivot lands
-        // in world space, we just:
-        //   1. Move to Position
-        //   2. Rotate around origin (pivot is already here)
-        //   3. Draw quad offset so the pivot lands correctly
-        //      on the quad: shift by -(pivotX*sx, pivotY*sy)
-        //      so top-left is at (-pivotX*sx, -pivotY*sy)
-        // --------------------------------------------------
-        glTranslatef(e.x, e.y, 0);
-        glRotatef(e.rotation, 0, 0, 1);
-
-        // Offset quad so pivot point sits at the origin
-        float px = e.pivotX * e.sx;
-        float py = e.pivotY * e.sy;
-        glTranslatef(-px, -py, 0);
-
-        // Draw quad from (0,0) to (w*sx, h*sy)
-        float sw = w * e.sx;
-        float sh = h * e.sy;
-
-        glBegin(GL_QUADS);
-            glTexCoord2f(u1, v1); glVertex2f(0,  0);
-            glTexCoord2f(u2, v1); glVertex2f(sw, 0);
-            glTexCoord2f(u2, v2); glVertex2f(sw, sh);
-            glTexCoord2f(u1, v2); glVertex2f(0,  sh);
-        glEnd();
-
-        glPopMatrix();
-    }
+    drawTimeline(*activeTimeline, img, atlas,
+        Vec2{0, 0}, 0.0f, Vec2{1, 1}, currentFrame);
 
     glDisable(GL_BLEND);
-    glDisable(GL_TEXTURE_2D);
+}
+
+// =========================
+// DRAW SPRITE HELPER
+// pos       = world position
+// rotRad    = rotation in radians (converted to degrees for GL)
+// pivot     = rotation origin in local pixel space
+// bitmapOff = additional local offset for bitmap-type sprites
+// =========================
+void TimelineAnimator::drawSprite(
+    const std::string& name,
+    Image* img, Atlas* atlas,
+    Vec2 pos, float rotRad, Vec2 scale, Vec2 pivot,
+    Vec2 bitmapOff
+)
+{
+    Frame fr;
+    if (!atlas->get(name, fr)) return;
+
+    float rotDeg = rotRad * (180.0f / 3.14159265f);
+
+    float w = fr.w * scale.x;
+    float h = fr.h * scale.y;
+
+    // Pivot in scaled local space
+    float px = pivot.x * scale.x;
+    float py = pivot.y * scale.y;
+
+    // Bitmap offset in scaled local space
+    float bx = bitmapOff.x * scale.x;
+    float by = bitmapOff.y * scale.y;
+
+    float u1 = fr.x / (float)img->width;
+    float v1 = fr.y / (float)img->height;
+    float u2 = (fr.x + fr.w) / (float)img->width;
+    float v2 = (fr.y + fr.h) / (float)img->height;
+
+    glEnable(GL_TEXTURE_2D);
+    glBindTexture(GL_TEXTURE_2D, img->textureID);
+
+    glPushMatrix();
+
+    // 1. Move to world position
+    glTranslatef(pos.x, pos.y, 0);
+
+    // 2. Rotate around pivot
+    glTranslatef(px, py, 0);
+    glRotatef(rotDeg, 0, 0, 1);
+    glTranslatef(-px, -py, 0);
+
+    // 3. Apply bitmap's own local offset (for bitmap-inside-symbol type)
+    glTranslatef(bx, by, 0);
+
+    glBegin(GL_QUADS);
+    glTexCoord2f(u1, v1); glVertex2f(0, 0);
+    glTexCoord2f(u2, v1); glVertex2f(w, 0);
+    glTexCoord2f(u2, v2); glVertex2f(w, h);
+    glTexCoord2f(u1, v2); glVertex2f(0, h);
+    glEnd();
+
+    glPopMatrix();
+}
+
+// =========================
+// CORE RENDER
+// =========================
+void TimelineAnimator::drawTimeline(
+    TA_Timeline& timeline,
+    Image*       img,
+    Atlas*       atlas,
+    Vec2         parentPos,
+    float        parentRot,
+    Vec2         parentScale,
+    int          frame
+)
+{
+    // Animate exports layers top-to-bottom (index 0 = topmost layer in panel).
+    // Topmost layer should draw LAST (on top), so iterate in reverse.
+    for (int li = (int)timeline.layers.size() - 1; li >= 0; li--)
+    {
+        auto& layer = timeline.layers[li];
+        for (auto& f : layer.frames)
+        {
+            if (frame < f.index || frame >= f.index + f.duration)
+                continue;
+
+            for (auto& e : f.elements)
+            {
+                // Accumulate world transform
+                // Position is in parent-local pixels, rotated by parent
+                float cosR = cosf(parentRot);
+                float sinR = sinf(parentRot);
+                float lx   = e.position.x * parentScale.x;
+                float ly   = e.position.y * parentScale.y;
+
+                Vec2 pos = {
+                    parentPos.x + cosR * lx - sinR * ly,
+                    parentPos.y + sinR * lx + cosR * ly
+                };
+
+                float rot  = parentRot + e.rotation;
+                Vec2 scale = { parentScale.x * e.scale.x, parentScale.y * e.scale.y };
+
+                // --- Leaf sprite (ATLAS_SPRITE or bitmap-inside-symbol) ---
+                if (!e.spriteName.empty())
+                {
+                    drawSprite(e.spriteName, img, atlas,
+                        pos, rot, scale, e.pivot, e.bitmapOff);
+                }
+
+                // --- Nested symbol ---
+                if (!e.symbolName.empty() && symbols.count(e.symbolName))
+                {
+                    auto& sym = symbols[e.symbolName];
+
+                    int symFrame;
+                    if (e.isGraphic)
+                    {
+                        // Graphic: firstFrame tells us which frame of the child to show.
+                        // It's already baked per-frame in the export (firstFrame == parent frame index).
+                        symFrame = e.firstFrame % (sym.totalFrames > 0 ? sym.totalFrames : 1);
+                    }
+                    else
+                    {
+                        // Movieclip: plays its own internal clock synced to parent
+                        symFrame = frame % (sym.totalFrames > 0 ? sym.totalFrames : 1);
+                    }
+
+                    drawTimeline(sym, img, atlas, pos, rot, scale, symFrame);
+                }
+            }
+        }
+    }
 }

@@ -6,9 +6,8 @@ void Camera::apply(int screenWidth, int screenHeight)
     glMatrixMode(GL_PROJECTION);
     glLoadIdentity();
 
-    // center-based camera
-    float halfW = (float)screenWidth * 0.5f / zoom;
-    float halfH = (float)screenHeight * 0.5f / zoom;
+    float halfW = (screenWidth * 0.5f) / zoom;
+    float halfH = (screenHeight * 0.5f) / zoom;
 
     glOrtho(
         position.x - halfW,
@@ -21,4 +20,8 @@ void Camera::apply(int screenWidth, int screenHeight)
 
     glMatrixMode(GL_MODELVIEW);
     glLoadIdentity();
+
+    // optional camera rotation (safe even if unused)
+    if (rotation != 0.0f)
+        glRotatef(rotation, 0, 0, 1);
 }

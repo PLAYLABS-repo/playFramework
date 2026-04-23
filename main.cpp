@@ -35,10 +35,9 @@ int main()
 
     // Play a named animation: "ENTITY"_ANIM_"ANIMTYPE"
     // e.g. PLAYER_ANIM_RUN, PLAYER_ANIM_IDLE, PLAYER_ANIM_JUMP, etc.
-    timeline.play("PLAYER", "RUN");
-
+    timeline.play("ANIMATION", "ALL");
     Camera cam;
-    cam.position = { 640, 360 };  // centre of screen
+    cam.position = {0, 0 };  // centre of screen
     cam.rotation = 0.0f;
     cam.zoom     = 1.0f;
 
@@ -74,6 +73,7 @@ int main()
         if (Input::isKeyPressed('4')) timeline.play("PLAYER", "SHOOT");
         if (Input::isKeyPressed('5')) timeline.play("PLAYER", "RUNSHOOT");
         if (Input::isKeyPressed('6')) timeline.play("PLAYER", "SLIDE");
+        if (Input::isKeyPressed('7')) timeline.play("PLAYER", "DIE");
 
         cam.apply(1280, 720);
 

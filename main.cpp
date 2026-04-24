@@ -6,9 +6,12 @@
 #include "TimelineAnimator.h"
 #include "Timer.h"
 #include "Sound.h"
+#include <iostream>
 
 #include <GL/gl.h>
 #include <windows.h>
+
+using namespace std;
 
 int main()
 {
@@ -39,7 +42,7 @@ int main()
     Camera cam;
     cam.position = {0, 0 };  // centre of screen
     cam.rotation = 0.0f;
-    cam.zoom     = 1.0f;
+    cam.zoom     = 2.0f;
 
     Sound music;
     if (music.load("test.wav"))
@@ -66,6 +69,8 @@ int main()
         if (Input::isKeyDown('Z')) cam.zoom *= (1.0f + dt * 2.0f);
         if (Input::isKeyDown('X')) cam.zoom /= (1.0f + dt * 2.0f);
 
+
+
         // Switch animations at runtime: 1-6 keys
         if (Input::isKeyPressed('1')) timeline.play("PLAYER", "RUN");
         if (Input::isKeyPressed('2')) timeline.play("PLAYER", "IDLE");
@@ -81,6 +86,7 @@ int main()
         timeline.draw(&texture, &atlas, cam);
 
         SwapBuffers(window.getHDC());
+
     }
 
     return 0;

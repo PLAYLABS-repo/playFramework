@@ -7,42 +7,30 @@
 #include "Timer.h"
 #include "Sound.h"
 #include <iostream>
-
 #include <GL/gl.h>
 #include <windows.h>
-
 using namespace std;
 
 int main()
 {
     Window window;
-    if (!window.create("playFramework", 1280, 720))
-        return -1;
+    window.create("playFramework", 1280, 720);
 
     Image texture;
     Atlas atlas;
+    texture.load("tests/anim/spritemap.png");
+    atlas.load("tests/anim/spritemap.json");
 
-    if (!texture.load("anim/spritemap.png") ||
-        !atlas.load("anim/spritemap.json"))
-    {
-        MessageBoxA(NULL, "Failed to load texture/atlas", "Error", MB_OK);
-        return -1;
-    }
+    Anim player("tests/anim/Animation.json");
+    player.position = Vec2(50, -90);
+    player.size     = Vec2(1.f, 1.0f);
+    player.rotation = 0.0f;
+    player.anim("PLAYER", "RUN");
 
-    TimelineAnimator timeline;
-    if (!timeline.load("anim/Animation.json"))
-    {
-        MessageBoxA(NULL, "Failed to load animation", "Error", MB_OK);
-        return -1;
-    }
-
-    // Play a named animation: "ENTITY"_ANIM_"ANIMTYPE"
-    // e.g. PLAYER_ANIM_RUN, PLAYER_ANIM_IDLE, PLAYER_ANIM_JUMP, etc.
-    timeline.play("ANIMATION", "ALL");
     Camera cam;
-    cam.position = {0, 0 };  // centre of screen
+    cam.position = {0, 0};
     cam.rotation = 0.0f;
-    cam.zoom     = 2.0f;
+    cam.zoom     = 1.232f;
 
     Sound music;
     if (music.load("test.wav"))
@@ -65,28 +53,32 @@ int main()
         if (Input::isKeyDown(VK_UP))    cam.position.y -= camSpeed;
         if (Input::isKeyDown(VK_DOWN))  cam.position.y += camSpeed;
 
+        // Player movement
+        float speed = 300.0f * dt;
+        if (Input::isKeyDown('A')) player.position.x -= speed;
+        if (Input::isKeyDown('D')) player.position.x += speed;
+        if (Input::isKeyDown('W')) player.position.y -= speed;
+        if (Input::isKeyDown('S')) player.position.y += speed;
+
         // Zoom
         if (Input::isKeyDown('Z')) cam.zoom *= (1.0f + dt * 2.0f);
         if (Input::isKeyDown('X')) cam.zoom /= (1.0f + dt * 2.0f);
 
-
-
-        // Switch animations at runtime: 1-6 keys
-        if (Input::isKeyPressed('1')) timeline.play("PLAYER", "RUN");
-        if (Input::isKeyPressed('2')) timeline.play("PLAYER", "IDLE");
-        if (Input::isKeyPressed('3')) timeline.play("PLAYER", "JUMP");
-        if (Input::isKeyPressed('4')) timeline.play("PLAYER", "SHOOT");
-        if (Input::isKeyPressed('5')) timeline.play("PLAYER", "RUNSHOOT");
-        if (Input::isKeyPressed('6')) timeline.play("PLAYER", "SLIDE");
-        if (Input::isKeyPressed('7')) timeline.play("PLAYER", "DIE");
+        // Switch animations at runtime
+        if (Input::isKeyPressed('1')) player.anim("PLAYER", "RUN");
+        if (Input::isKeyPressed('2')) player.anim("PLAYER", "IDLE");
+        if (Input::isKeyPressed('3')) player.anim("PLAYER", "JUMP");
+        if (Input::isKeyPressed('4')) player.anim("PLAYER", "SHOOT");
+        if (Input::isKeyPressed('5')) player.anim("PLAYER", "RUNSHOOT");
+        if (Input::isKeyPressed('6')) player.anim("PLAYER", "SLIDE");
+        if (Input::isKeyPressed('7')) player.anim("PLAYER", "DIE");
 
         cam.apply(1280, 720);
 
-        timeline.update(dt);
-        timeline.draw(&texture, &atlas, cam);
+        player.update(dt);
+        player.draw(&texture, &atlas, cam);
 
         SwapBuffers(window.getHDC());
-
     }
 
     return 0;

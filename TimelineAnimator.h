@@ -3,6 +3,7 @@
 #include <vector>
 #include <map>
 #include "Vec2.h"
+#include <GL/gl.h>
 
 class Image;
 class Atlas;
@@ -86,4 +87,68 @@ private:
         Vec2 pos, float rotRad, Vec2 scale, Vec2 pivot,
         Vec2 bitmapOff
     );
+};
+
+// =========================
+// ANIM — friendly wrapper around TimelineAnimator
+//
+// Usage:
+//   Anim player("assets/animation.json");
+//   player.position = Vec2(400, 300);
+//   player.size     = Vec2(1.0f, 1.0f);   // scale; (1,1) = natural atlas size
+//   player.rotation = 0.0f;               // radians, applied at the root
+//   player.anim("PLAYER", "RUN");         // plays PLAYER_ANIM_RUN
+//
+//   // each frame:
+//   player.update(dt);
+//   player.draw(img, atlas, cam);
+// =========================
+class Anim
+{
+public:
+    Vec2  position = {0.0f, 0.0f};
+    Vec2  size     = {1.0f, 1.0f};   // root-level scale multiplier
+    float rotation = 0.0f;           // root-level rotation in radians
+
+    // Load the JSON animation file.
+    explicit Anim(const char* jsonPath)
+    {
+        loaded = animator.load(jsonPath);
+    }
+
+    // Select which animation clip to play.
+    //   anim("PLAYER", "RUN")  →  plays PLAYER_ANIM_RUN
+    void anim(const std::string& entity, const std::string& animType)
+    {
+        animator.play(entity, animType);
+    }
+
+    void update(float dt) { animator.update(dt); }
+
+    // Draws the current frame offset by position/size/rotation.
+    // The animator's own draw() always starts the root timeline at (0,0) with
+    // scale (1,1) and rot 0. We push a GL matrix before calling it so that
+    // every element naturally inherits our world transform without touching
+    // TimelineAnimator internals at all.
+    void draw(Image* img, Atlas* atlas, Camera& cam)
+    {
+        glPushMatrix();
+
+        // Apply root world transform so all child elements inherit it.
+        glTranslatef(position.x, position.y, 0.0f);
+        glRotatef(rotation * (180.0f / 3.14159265f), 0.0f, 0.0f, 1.0f);
+        glScalef(size.x, size.y, 1.0f);
+
+        animator.draw(img, atlas, cam);
+
+        glPopMatrix();
+    }
+
+    bool isLoaded()   const { return loaded; }
+    int  frame()      const { return animator.currentFrame; }
+    int  frameCount() const { return animator.totalFrames;  }
+
+private:
+    TimelineAnimator animator;
+    bool loaded = false;
 };

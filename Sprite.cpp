@@ -29,6 +29,7 @@ void Sprite::rotateTo(float degrees)
 // =========================
 void Sprite::update(float dt)
 {
+    // POSITION
     float dx = targetPosition.x - position.x;
     float dy = targetPosition.y - position.y;
     float dist = sqrtf(dx * dx + dy * dy);
@@ -46,6 +47,7 @@ void Sprite::update(float dt)
         }
     }
 
+    // SCALE
     float sx = targetScale.x - scale.x;
     float sy = targetScale.y - scale.y;
     float sDist = sqrtf(sx * sx + sy * sy);
@@ -63,6 +65,7 @@ void Sprite::update(float dt)
         }
     }
 
+    // ROTATION
     float r = targetRotation - rotation;
 
     if (fabs(r) > 0.01f)
@@ -77,7 +80,7 @@ void Sprite::update(float dt)
 }
 
 // =========================
-// AABB
+// AABB (pivot-aware)
 // =========================
 AABB Sprite::getAABB() const
 {
@@ -97,6 +100,7 @@ AABB Sprite::getAABB() const
         }
     }
 
+    // pivot shifts the box
     float left = position.x - pivot.x;
     float top  = position.y - pivot.y;
 
@@ -104,7 +108,7 @@ AABB Sprite::getAABB() const
 }
 
 // =========================
-// DRAW (FIXED ALPHA PIPELINE)
+// DRAW (CORRECT PIVOT PIPELINE)
 // =========================
 void Sprite::draw(Camera& cam)
 {
@@ -115,13 +119,7 @@ void Sprite::draw(Camera& cam)
 
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-
-    // FIXED: alpha always applied cleanly
-    float finalAlpha = alpha;
-    if (finalAlpha < 0.0f) finalAlpha = 0.0f;
-    if (finalAlpha > 1.0f) finalAlpha = 1.0f;
-
-    glColor4f(1.0f, 1.0f, 1.0f, finalAlpha);
+    glColor4f(1, 1, 1, alpha);
 
     float w = image->width * scale.x;
     float h = image->height * scale.y;
@@ -145,13 +143,26 @@ void Sprite::draw(Camera& cam)
 
     glPushMatrix();
 
+    // =========================
+    // WORLD POSITION
+    // =========================
     glTranslatef(position.x, position.y, 0);
+
+    // =========================
+    // APPLY PIVOT (FLASH STYLE)
+    // =========================
     glTranslatef(-pivot.x, -pivot.y, 0);
 
+    // =========================
+    // ROTATE AROUND PIVOT
+    // =========================
     glTranslatef(pivot.x, pivot.y, 0);
     glRotatef(rotation, 0, 0, 1);
     glTranslatef(-pivot.x, -pivot.y, 0);
 
+    // =========================
+    // SKEW
+    // =========================
     float skewMatrix[16] =
     {
         1, skewY, 0, 0,
@@ -162,6 +173,9 @@ void Sprite::draw(Camera& cam)
 
     glMultMatrixf(skewMatrix);
 
+    // =========================
+    // DRAW (TOP-LEFT SPACE)
+    // =========================
     glBegin(GL_QUADS);
 
     glTexCoord2f(u1, v1); glVertex2f(0, 0);

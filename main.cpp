@@ -1,6 +1,7 @@
 #include "PlaylabsGL.h"
 #include <GL/gl.h>
 
+//Build 0.0.1
 // =============================================================
 // HELPERS
 // =============================================================
@@ -77,7 +78,7 @@ struct Player
 int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int)
 {
     Window win;
-    if (!win.create("Playlabs GL", 1280, 720))
+    if (!win.create("rubberbandbattle", 1280, 720))
         return -1;
 
     Camera cam;

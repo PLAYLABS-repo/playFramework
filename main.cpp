@@ -1,15 +1,105 @@
 #include "PlaylabsGL.h"
 #include <GL/gl.h>
+#include <cstdio>
+#include <cstring>
+#include <vector>
+#include <cmath>
+#include <algorithm>
 
-//Build 0.0.1
+#define STB_TRUETYPE_IMPLEMENTATION
+#include "stb_truetype.h"
+
+//Build 0.0.6
+// =============================================================
+// CONSTANTS
+// =============================================================
+static const float PI             = 3.14159265f;
+static const float BULLET_GRAVITY = 600.0f;
+static const float MIN_POWER      = 200.0f;
+static const float MAX_POWER      = 900.0f;
+static const float CHARGE_RATE    = MAX_POWER / 1.2f;
+static const float SHOOT_COOLDOWN = 0.15f;
+static const float BULLET_LIFETIME= 4.0f;
+static const float ARROW_SIZE     = 12.0f;
+static const int   ARC_SEGMENTS   = 40;
+static const float ARC_STEP_T     = 0.08f;
+static const int   MAX_AMMO       = 100;
+
+// =============================================================
+// FONT
+// =============================================================
+struct FontRenderer
+{
+    stbtt_bakedchar cdata[96];
+    GLuint          texID = 0;
+    float           size  = 0.0f;
+
+    bool load(const char* path, float pixelHeight)
+    {
+        FILE* f = fopen(path, "rb");
+        if (!f) return false;
+        fseek(f, 0, SEEK_END);
+        long len = ftell(f);
+        rewind(f);
+        unsigned char* ttf = new unsigned char[len];
+        fread(ttf, 1, len, f);
+        fclose(f);
+
+        const int BW = 512, BH = 512;
+        unsigned char* bitmap = new unsigned char[BW * BH];
+        stbtt_BakeFontBitmap(ttf, 0, pixelHeight, bitmap, BW, BH, 32, 96, cdata);
+        delete[] ttf;
+
+        glGenTextures(1, &texID);
+        glBindTexture(GL_TEXTURE_2D, texID);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_ALPHA, BW, BH, 0,
+                     GL_ALPHA, GL_UNSIGNED_BYTE, bitmap);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glBindTexture(GL_TEXTURE_2D, 0);
+        delete[] bitmap;
+
+        size = pixelHeight;
+        return true;
+    }
+
+    void draw(const char* text, float x, float y,
+              float r = 1.f, float g = 1.f, float b = 1.f, float a = 1.f)
+    {
+        glEnable(GL_TEXTURE_2D);
+        glEnable(GL_BLEND);
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+        glBindTexture(GL_TEXTURE_2D, texID);
+        glColor4f(r, g, b, a);
+        glBegin(GL_QUADS);
+        float cx = x, cy = y;
+        for (const char* p = text; *p; ++p)
+        {
+            if (*p < 32 || *p > 127) continue;
+            stbtt_aligned_quad q;
+            stbtt_GetBakedQuad(cdata, 512, 512, *p - 32, &cx, &cy, &q, 1);
+            glTexCoord2f(q.s0, q.t0); glVertex2f(q.x0, q.y0);
+            glTexCoord2f(q.s1, q.t0); glVertex2f(q.x1, q.y0);
+            glTexCoord2f(q.s1, q.t1); glVertex2f(q.x1, q.y1);
+            glTexCoord2f(q.s0, q.t1); glVertex2f(q.x0, q.y1);
+        }
+        glEnd();
+        glBindTexture(GL_TEXTURE_2D, 0);
+        glColor4f(1, 1, 1, 1);
+    }
+
+    void destroy() { if (texID) { glDeleteTextures(1, &texID); texID = 0; } }
+};
+
 // =============================================================
 // HELPERS
 // =============================================================
-
 static void drawRect(float x, float y, float w, float h,
                      float r, float g, float b, float a = 1.0f)
 {
     glDisable(GL_TEXTURE_2D);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
     glColor4f(r, g, b, a);
     glBegin(GL_QUADS);
     glVertex2f(x,     y);
@@ -20,28 +110,93 @@ static void drawRect(float x, float y, float w, float h,
     glColor4f(1, 1, 1, 1);
 }
 
+static void drawLine(float x0, float y0, float x1, float y1,
+                     float r, float g, float b, float a = 1.0f, float width = 2.0f)
+{
+    glDisable(GL_TEXTURE_2D);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    glLineWidth(width);
+    glColor4f(r, g, b, a);
+    glBegin(GL_LINES);
+    glVertex2f(x0, y0);
+    glVertex2f(x1, y1);
+    glEnd();
+    glLineWidth(1.0f);
+    glColor4f(1, 1, 1, 1);
+}
+
+static void drawTriangle(float ax, float ay, float bx, float by,
+                          float cx, float cy,
+                          float r, float g, float b, float a = 1.0f)
+{
+    glDisable(GL_TEXTURE_2D);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    glColor4f(r, g, b, a);
+    glBegin(GL_TRIANGLES);
+    glVertex2f(ax, ay);
+    glVertex2f(bx, by);
+    glVertex2f(cx, cy);
+    glEnd();
+    glColor4f(1, 1, 1, 1);
+}
+
 // =============================================================
-// CAMERA  (top-left origin, pixel-perfect)
+// CAMERA
 // =============================================================
 static void applyCamera2D(Camera& cam, int sw, int sh)
 {
     glMatrixMode(GL_PROJECTION);
     glLoadIdentity();
-
     float visW = sw / cam.zoom;
     float visH = sh / cam.zoom;
-
-    glOrtho(
-        cam.position.x,
-        cam.position.x + visW,
-        cam.position.y + visH,
-        cam.position.y,
-        -1.0f, 1.0f
-    );
-
+    glOrtho(cam.position.x, cam.position.x + visW,
+            cam.position.y + visH, cam.position.y,
+            -1.0f, 1.0f);
     glMatrixMode(GL_MODELVIEW);
     glLoadIdentity();
 }
+
+static void applyScreenSpace(int sw, int sh)
+{
+    glMatrixMode(GL_PROJECTION);
+    glLoadIdentity();
+    glOrtho(0, sw, sh, 0, -1.0f, 1.0f);
+    glMatrixMode(GL_MODELVIEW);
+    glLoadIdentity();
+}
+
+// Screen pixel â†’ world coordinate using the camera
+static void screenToWorld(float sx, float sy,
+                           const Camera& cam, int sw, int sh,
+                           float& wx, float& wy)
+{
+    float visW = sw / cam.zoom;
+    float visH = sh / cam.zoom;
+    wx = cam.position.x + (sx / sw) * visW;
+    wy = cam.position.y + (sy / sh) * visH;
+}
+
+// =============================================================
+// BULLET
+// =============================================================
+struct Bullet
+{
+    float x, y;
+    float velX, velY;
+    float w    = 48.0f;
+    float h    = 48.0f;
+    float hitW = 40.0f;
+    float hitH = 40.0f;
+    float life = BULLET_LIFETIME;
+    bool  dead = false;
+
+    Sprite* sprite = nullptr;
+
+    float hitX() const { return x + (w - hitW) * 0.5f; }
+    float hitY() const { return y + (h - hitH) * 0.5f; }
+};
 
 // =============================================================
 // PLAYER
@@ -49,28 +204,82 @@ static void applyCamera2D(Camera& cam, int sw, int sh)
 struct Player
 {
     float x     = 200.0f;
-    float y     = 436.0f;  // starts at maxY - h
+    float y     = 436.0f;
     float w     = 64.0f;
     float h     = 64.0f;
     float speed = 250.0f;
 
-    // Vertical free walk — clamped between these world Y values
-    float minY = 0.0f;   // highest the player can walk (smaller Y = higher on screen)
-    float maxY = 500.0f;   // lowest the player can walk
+    float minY = 100.0f;
+    float maxY = 500.0f;
 
-    // Jump — arc goes up and comes back to the SAME Y it left from
-    float baseY     = 436.0f;  // Y the player jumped from; restored on landing
+    float baseY     = 436.0f;
     float velocityY = 0.0f;
     float gravity   = 900.0f;
     float jumpForce = -520.0f;
     bool  jumping   = false;
 
+    // Shooting
+    bool  charging      = false;
+    float chargeTimer   = 0.0f;   // 0.0 â†’ 1.0
+    float shootCooldown = 0.0f;
+    int   ammo          = MAX_AMMO;
+
+    // Aim (unit vector, world space)
+    float aimDirX = 1.0f;
+    float aimDirY = 0.0f;
+
     Sprite*           sprite = nullptr;
     TimelineAnimator* anim   = nullptr;
 
     enum class State { IDLE, RUN, JUMP } state = State::IDLE;
-    float facingX = 1.0f;
+    float facingX = 1.0f;   // -1 = right, 1 = left
+
+    float muzzleX() const { return x + w * 0.5f; }
+    float muzzleY() const { return y + h * 0.5f; }
 };
+
+// =============================================================
+// ARC PREVIEW â€” solid polyline + arrowhead
+// =============================================================
+static void drawArcPreview(float ox, float oy,
+                            float vx, float vy,
+                            float r, float g, float b)
+{
+    float px = ox, py = oy;
+    float pvx = vx, pvy = vy;
+    float endX = ox, endY = oy;
+    float prevX = ox, prevY = oy;
+
+    for (int i = 0; i < ARC_SEGMENTS; ++i)
+    {
+        float nx  = px + pvx * ARC_STEP_T;
+        float ny  = py + pvy * ARC_STEP_T + 0.5f * BULLET_GRAVITY * ARC_STEP_T * ARC_STEP_T;
+        float nvy = pvy + BULLET_GRAVITY * ARC_STEP_T;
+
+        float alpha = 1.0f - (float)i / ARC_SEGMENTS;
+        drawLine(px, py, nx, ny, r, g, b, alpha, 2.5f);
+
+        prevX = px; prevY = py;
+        endX = nx;  endY = ny;
+        px = nx; py = ny;
+        pvx = pvx; pvy = nvy;
+    }
+
+    // Arrowhead
+    float dx = endX - prevX;
+    float dy = endY - prevY;
+    float len = sqrtf(dx * dx + dy * dy);
+    if (len > 0.0001f) { dx /= len; dy /= len; }
+
+    float tx  = endX + dx * ARROW_SIZE;
+    float ty  = endY + dy * ARROW_SIZE;
+    float px1 = endX - dy * ARROW_SIZE * 0.5f;
+    float py1 = endY + dx * ARROW_SIZE * 0.5f;
+    float px2 = endX + dy * ARROW_SIZE * 0.5f;
+    float py2 = endY - dx * ARROW_SIZE * 0.5f;
+
+    drawTriangle(tx, ty, px1, py1, px2, py2, r, g, b, 1.0f);
+}
 
 // =============================================================
 // ENTRY POINT
@@ -83,9 +292,15 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int)
 
     Camera cam;
     cam.position = {0.0f, 0.0f};
-    cam.zoom     = 1.6f;
+    cam.zoom     = 1.723f;
 
     Timer timer;
+
+    // ---------------------------------------------------------
+    // Font
+    // ---------------------------------------------------------
+    FontRenderer font;
+    font.load("tests/font/Confale.ttf", 28.0f);
 
     // ---------------------------------------------------------
     // Assets
@@ -98,7 +313,7 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int)
     bgm->play(true);
 
     Sound* sfxJump = Playlabs_CreateSound();
-    sfxJump->load("assets/jump.mp3");
+    sfxJump->load("jump.wav");
 
     // ---------------------------------------------------------
     // Player
@@ -116,29 +331,109 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int)
 
     player.anim = Playlabs_CreateAnimator();
     if (player.anim->load("tests/anim/Animation.json"))
-        player.anim->play("PLAYER", "IDLE");
+        Playlabs_Anim(player.anim, PLAYER, IDLE);
 
     // ---------------------------------------------------------
     // Background
     // ---------------------------------------------------------
     Sprite* background         = Playlabs_CreateSprite();
-    background->frameName      = "bg_layer_00";
+    background->frameName      = "0000";
     background->position       = {0.0f, 0.0f};
     background->targetPosition = {0.0f, 0.0f};
 
     // ---------------------------------------------------------
-    // GAME LOOP
+    // Bullets
     // ---------------------------------------------------------
+    std::vector<Bullet> bullets;
+    bullets.reserve(64);
+
+    // Mouse state tracking for release detection
+    bool prevMouseHeld = false;
+
+    // ==========================================================
+    // GAME LOOP
+    // ==========================================================
     while (win.process())
     {
         float dt = timer.delta();
         if (dt > 0.05f) dt = 0.05f;
 
-        // -----------------------------------------------------
-        // INPUT
-        // -----------------------------------------------------
         Playlabs_PollInput(&win);
 
+        // ------------------------------------------------------
+        // MOUSE â†’ world aim direction
+        // ------------------------------------------------------
+        int mousePixelX = 0, mousePixelY = 0;
+        Playlabs_MousePos(&mousePixelX, &mousePixelY);   // â† correct API call
+
+        float mouseWorldX, mouseWorldY;
+        screenToWorld((float)mousePixelX, (float)mousePixelY,
+                      cam, win.getWidth(), win.getHeight(),
+                      mouseWorldX, mouseWorldY);
+
+        float aimDX = mouseWorldX - player.muzzleX();
+        float aimDY = mouseWorldY - player.muzzleY();
+        float aimLen = sqrtf(aimDX * aimDX + aimDY * aimDY);
+        if (aimLen > 0.001f)
+        {
+            player.aimDirX = aimDX / aimLen;
+            player.aimDirY = aimDY / aimLen;
+        }
+
+        // Facing follows mouse
+        player.facingX = (player.aimDirX > 0.0f) ? -1.0f : 1.0f;
+
+        // ------------------------------------------------------
+        // CHARGE + RELEASE
+        // ------------------------------------------------------
+        player.shootCooldown -= dt;
+
+        bool mouseHeld    = Playlabs_KeyDown(VK_LBUTTON) != 0;
+        bool justReleased = prevMouseHeld && !mouseHeld;
+        prevMouseHeld     = mouseHeld;
+
+        // Accumulate charge while held (only if have ammo)
+        if (mouseHeld && player.shootCooldown <= 0.0f && player.ammo > 0)
+        {
+            player.charging    = true;
+            player.chargeTimer += dt * (CHARGE_RATE / MAX_POWER);
+            if (player.chargeTimer > 1.0f) player.chargeTimer = 1.0f;
+        }
+
+        // Fire on release
+        if (justReleased && player.charging)
+        {
+            if (player.ammo > 0)
+            {
+                float power = MIN_POWER + (MAX_POWER - MIN_POWER) * player.chargeTimer;
+
+                Bullet b;
+                b.x    = player.muzzleX() - 24.0f;
+                b.y    = player.muzzleY() - 24.0f;
+                b.velX = player.aimDirX * power;
+                b.velY = player.aimDirY * power;
+
+                b.sprite              = Playlabs_CreateSprite();
+                b.sprite->image       = sheet;
+                b.sprite->atlas       = atlas;
+                b.sprite->frameName   = "0000";
+                b.sprite->scale       = {player.facingX, 1.0f};
+                b.sprite->targetScale = {player.facingX, 1.0f};
+                b.sprite->position      = {b.x, b.y};
+                b.sprite->targetPosition = {b.x, b.y};
+
+                bullets.push_back(b);
+                player.ammo--;
+            }
+
+            player.charging    = false;
+            player.chargeTimer = 0.0f;
+            player.shootCooldown = SHOOT_COOLDOWN;
+        }
+
+        // ------------------------------------------------------
+        // MOVEMENT
+        // ------------------------------------------------------
         bool  moving = false;
         float moveX  = 0.0f;
         float moveY  = 0.0f;
@@ -146,111 +441,121 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int)
         if (Playlabs_KeyDown(VK_RIGHT) || Playlabs_KeyDown('D')) { moveX =  1.0f; moving = true; }
         if (Playlabs_KeyDown(VK_LEFT)  || Playlabs_KeyDown('A')) { moveX = -1.0f; moving = true; }
 
-        // Vertical walk — only allowed when not jumping
         if (!player.jumping)
         {
             if (Playlabs_KeyDown(VK_UP)   || Playlabs_KeyDown('W')) { moveY = -1.0f; moving = true; }
             if (Playlabs_KeyDown(VK_DOWN) || Playlabs_KeyDown('S')) { moveY =  1.0f; moving = true; }
         }
 
-        // Jump — only when not already jumping
         if (Playlabs_KeyPressed(VK_SPACE) && !player.jumping)
         {
-            player.baseY     = player.y;          // remember where we jumped from
+            player.baseY     = player.y;
             player.velocityY = player.jumpForce;
             player.jumping   = true;
             player.state     = Player::State::JUMP;
-            player.anim->play("PLAYER", "JUMP");
+            Playlabs_Anim(player.anim, PLAYER, JUMP);
             sfxJump->play(false);
         }
 
-        // -----------------------------------------------------
-        // MOVEMENT
-        // -----------------------------------------------------
         player.x += moveX * player.speed * dt;
 
         if (!player.jumping)
         {
-            // Free vertical walk, clamped to [minY, maxY - h]
             player.y += moveY * player.speed * dt;
             player.y  = (player.y < player.minY)            ? player.minY
                       : (player.y > player.maxY - player.h) ? player.maxY - player.h
                       : player.y;
-
-            // Keep baseY in sync so a jump always leaves from current position
             player.baseY = player.y;
         }
         else
         {
-            // Jump arc — gravity pulls back down
             player.velocityY += player.gravity * dt;
             player.y         += player.velocityY * dt;
-
-            // Landed back at (or past) the Y we jumped from
             if (player.y >= player.baseY)
             {
-                player.y         = player.baseY;   // snap exactly back
+                player.y         = player.baseY;
                 player.velocityY = 0.0f;
                 player.jumping   = false;
-
-                // Transition back to run or idle
                 player.state = moving ? Player::State::RUN : Player::State::IDLE;
-                player.anim->play("PLAYER", moving ? "RUN" : "IDLE");
+                Playlabs_Anim(player.anim, PLAYER, moving ? RUN : IDLE);
             }
         }
 
-        // Facing direction
-        if (moveX != 0.0f) player.facingX = moveX > 0 ? -1.0f : 1.0f;
-
-        // Sync sprite
         player.sprite->position      = {player.x, player.y};
         player.sprite->targetPosition = {player.x, player.y};
         player.sprite->scale          = {player.facingX, 1.0f};
         player.sprite->targetScale    = {player.facingX, 1.0f};
 
-        // -----------------------------------------------------
-        // ANIMATION STATE  (only when grounded)
-        // -----------------------------------------------------
+        // ------------------------------------------------------
+        // ANIMATION STATE
+        // ------------------------------------------------------
         if (!player.jumping)
         {
             if (moving && player.state != Player::State::RUN)
             {
                 player.state = Player::State::RUN;
-                player.anim->play("PLAYER", "RUN");
+                Playlabs_Anim(player.anim, PLAYER, RUN);
             }
             else if (!moving && player.state != Player::State::IDLE)
             {
                 player.state = Player::State::IDLE;
-                player.anim->play("PLAYER", "IDLE");
+                Playlabs_Anim(player.anim, PLAYER, IDLE);
             }
         }
 
         Playlabs_SetAnimatorParent(player.anim,
-            player.x, player.y,
-            0.0f,
-            player.facingX, 1.0f
-        );
+            player.x, player.y, 0.0f, player.facingX, 1.0f);
 
-        // -----------------------------------------------------
+        // ------------------------------------------------------
         // CAMERA FOLLOW
-        // -----------------------------------------------------
+        // ------------------------------------------------------
         float targetCamX = player.x - win.getWidth()  * 0.5f + 340.0f;
         float targetCamY = player.y - win.getHeight() * 0.5f + 280.0f;
         cam.position.x  += (targetCamX - cam.position.x) * 5.0f * dt;
         cam.position.y  += (targetCamY - cam.position.y) * 5.0f * dt;
 
-        // -----------------------------------------------------
-        // COLLISION — hitbox shrinks while in the air
-        // Narrower and half height, anchored to feet
-        // -----------------------------------------------------
+        // ------------------------------------------------------
+        // UPDATE BULLETS
+        // ------------------------------------------------------
+        float wX = 100.0f, wY = 100.0f, wW = 100.0f, wH = 100.0f;
+
+        for (Bullet& b : bullets)
+        {
+            if (b.dead) continue;
+
+            b.velY += BULLET_GRAVITY * dt;
+            b.x    += b.velX * dt;
+            b.y    += b.velY * dt;
+
+            b.sprite->position      = {b.x, b.y};
+            b.sprite->targetPosition = {b.x, b.y};
+            b.sprite->update(dt);
+
+            b.life -= dt;
+            if (b.life <= 0.0f) { b.dead = true; continue; }
+
+            if (Playlabs_AABBIntersects(b.hitX(), b.hitY(), b.hitW, b.hitH,
+                                         wX, wY, wW, wH))
+                b.dead = true;
+        }
+
+        for (Bullet& b : bullets)
+            if (b.dead && b.sprite) { Playlabs_DestroySprite(b.sprite); b.sprite = nullptr; }
+        bullets.erase(
+            std::remove_if(bullets.begin(), bullets.end(),
+                           [](const Bullet& b){ return b.dead; }),
+            bullets.end());
+
+        // ------------------------------------------------------
+        // PLAYER COLLISION (wall)
+        // ------------------------------------------------------
         float playerHitboxSizeX = 100.0f;
         float playerHitboxSizeY = 200.0f;
         float hitW = player.jumping ? playerHitboxSizeX * 0.6f : playerHitboxSizeX;
         float hitH = player.jumping ? playerHitboxSizeY * 0.5f : playerHitboxSizeY;
-        float hitX = player.x + (player.w - 200) * 0.5f;
-        float hitY = player.y + (player.h);
+        float hitX = player.x + (player.w - 200.0f) * 0.5f;
+        float hitY = player.y + player.h;
 
-        float wX = 100.0f, wY = 100.0f, wW = 100.0f, wH = 100.0f;
         if (Playlabs_AABBIntersects(hitX, hitY, hitW, hitH, wX, wY, wW, wH))
         {
             player.x -= moveX * player.speed * dt;
@@ -258,13 +563,13 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int)
             player.sprite->targetPosition = {player.x, player.y};
         }
 
-        // -----------------------------------------------------
-        // RENDER
-        // -----------------------------------------------------
+        // ==========================================================
+        // RENDER â€” world
+        // ==========================================================
         Playlabs_Clear(0.12f, 0.12f, 0.18f, 1.0f);
         applyCamera2D(cam, win.getWidth(), win.getHeight());
 
-        drawRect(0, player.maxY, 2000, 64, 0.25f, 0.20f, 0.15f);  // floor at maxY
+        drawRect(0, player.maxY, 2000, 64, 0.25f, 0.20f, 0.15f);
 
         if (!sheet)
             drawRect(player.x, player.y, player.w, player.h, 0.2f, 0.6f, 1.0f);
@@ -272,19 +577,124 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int)
         background->update(dt);
         background->draw(cam);
 
+        for (Bullet& b : bullets)
+        {
+            b.sprite->draw(cam);
+            drawRect(b.hitX(), b.hitY(), b.hitW, b.hitH, 1.0f, 1.0f, 0.0f, 0.35f);
+        }
+
         player.sprite->update(dt);
         player.sprite->draw(cam);
-
         Playlabs_TickAnimator(player.anim, dt, sheet, atlas, &cam);
+
         drawRect(wX, wY, wW, wH, 1.0f, 0.0f, 0.0f, 0.5f);
-        drawRect(hitX, hitY, hitW, hitH, 0.0f, 1.0f, 0.0f, 0.5f);
+        drawRect(hitX, hitY, hitW, hitH, 0.0f, 1.0f, 0.5f, 0.5f);
+
+        // Arc preview while charging
+        if (player.charging && player.ammo > 0)
+        {
+            float power = MIN_POWER + (MAX_POWER - MIN_POWER) * player.chargeTimer;
+            float t  = player.chargeTimer;
+            float pr = 0.2f + t * 0.8f;
+            float pg = 0.8f - t * 0.6f;
+            float pb = 1.0f - t * 1.0f;
+            drawArcPreview(player.muzzleX(), player.muzzleY(),
+                           player.aimDirX * power,
+                           player.aimDirY * power,
+                           pr, pg, pb);
+        }
+
+        // ==========================================================
+        // RENDER â€” HUD (screen-space)
+        // ==========================================================
+        applyScreenSpace(win.getWidth(), win.getHeight());
+
+        // --- Position text ---
+        char posText[64];
+        snprintf(posText, sizeof(posText), "x: %.1f  y: %.1f", player.x, player.y);
+        float tw = (float)strlen(posText) * 16.0f;
+        drawRect(12.0f, 12.0f, tw, 36.0f, 0.0f, 0.0f, 0.0f, 0.45f);
+        font.draw(posText, 18.0f, 38.0f, 1.0f, 1.0f, 1.0f, 1.0f);
+
+        // --- Ammo pips ---
+        {
+            const float pipW   = 22.0f;
+            const float pipH   = 22.0f;
+            const float pipGap =  4.0f;
+            const float ammoX  = 16.0f;
+            const float ammoY  = 60.0f;
+            const float totalW = MAX_AMMO * (pipW + pipGap) - pipGap;
+
+            // Backing panel
+            drawRect(ammoX - 4.0f, ammoY - 28.0f,
+                     totalW + 8.0f, pipH + 36.0f,
+                     0.0f, 0.0f, 0.0f, 0.45f);
+
+            // "AMMO" label â€” red when empty, white otherwise
+            bool outOfAmmo = (player.ammo <= 0);
+            font.draw("AMMO",
+                      ammoX, ammoY - 4.0f,
+                      1.0f,
+                      outOfAmmo ? 0.2f : 1.0f,
+                      outOfAmmo ? 0.2f : 1.0f,
+                      1.0f);
+
+            // Count  e.g. "3 / 10"
+            char countBuf[16];
+            snprintf(countBuf, sizeof(countBuf), "%d / %d", player.ammo, MAX_AMMO);
+            font.draw(countBuf,
+                      ammoX + totalW + 12.0f, ammoY + pipH,
+                      outOfAmmo ? 1.0f : 0.9f,
+                      outOfAmmo ? 0.2f : 0.9f,
+                      outOfAmmo ? 0.2f : 0.9f,
+                      1.0f);
+
+            // One pip per slot
+            for (int i = 0; i < MAX_AMMO; ++i)
+            {
+                float px = ammoX + i * (pipW + pipGap);
+                bool  filled = (i < player.ammo);
+                drawRect(px, ammoY, pipW, pipH,
+                         filled ? 1.0f  : 0.2f,
+                         filled ? 0.85f : 0.2f,
+                         filled ? 0.1f  : 0.2f,
+                         1.0f);
+            }
+        }
+
+        // --- Power bar (only while charging) ---
+        if (player.charging && player.ammo > 0)
+        {
+            const float barW = 200.0f;
+            float barX = (win.getWidth()  - barW) * 0.5f;
+            float barY =  win.getHeight() - 52.0f;
+
+            float t  = player.chargeTimer;
+            float pr = 0.2f + t * 0.8f;
+            float pg = 0.8f - t * 0.6f;
+            float pb = 1.0f - t * 1.0f;
+
+            drawRect(barX - 4.0f, barY - 30.0f, barW + 8.0f, 52.0f,
+                     0.0f, 0.0f, 0.0f, 0.45f);
+            drawRect(barX, barY, barW, 16.0f, 0.15f, 0.15f, 0.15f, 0.9f);
+            drawRect(barX, barY, barW * player.chargeTimer, 16.0f, pr, pg, pb, 1.0f);
+
+            char chargeLabel[20];
+            snprintf(chargeLabel, sizeof(chargeLabel), "POWER  %d%%",
+                     (int)(player.chargeTimer * 100.0f));
+            font.draw(chargeLabel, barX, barY - 6.0f, pr, pg, pb, 1.0f);
+        }
 
         Playlabs_Present(&win);
     }
 
-    // ---------------------------------------------------------
+    // ==========================================================
     // CLEANUP
-    // ---------------------------------------------------------
+    // ==========================================================
+    for (Bullet& b : bullets)
+        if (b.sprite) Playlabs_DestroySprite(b.sprite);
+
+    font.destroy();
     Playlabs_DestroyAnimator(player.anim);
     Playlabs_DestroySprite(player.sprite);
     Playlabs_DestroySprite(background);

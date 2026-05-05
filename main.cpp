@@ -9,7 +9,7 @@
 #define STB_TRUETYPE_IMPLEMENTATION
 #include "stb_truetype.h"
 
-//Build 0.0.6
+//Build 0.0.7
 // =============================================================
 // CONSTANTS
 // =============================================================
@@ -139,6 +139,26 @@ static void drawTriangle(float ax, float ay, float bx, float by,
     glVertex2f(bx, by);
     glVertex2f(cx, cy);
     glEnd();
+    glColor4f(1, 1, 1, 1);
+}
+
+// Draw a textured quad stretched to fill (x,y,w,h) at given alpha
+static void drawImageStretched(Image* img, float x, float y,
+                                float w, float h, float alpha = 1.0f)
+{
+    if (!img) return;
+    glEnable(GL_TEXTURE_2D);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    glBindTexture(GL_TEXTURE_2D, img->textureID);
+    glColor4f(1.0f, 1.0f, 1.0f, alpha);
+    glBegin(GL_QUADS);
+    glTexCoord2f(0.0f, 0.0f); glVertex2f(x,     y);
+    glTexCoord2f(1.0f, 0.0f); glVertex2f(x + w, y);
+    glTexCoord2f(1.0f, 1.0f); glVertex2f(x + w, y + h);
+    glTexCoord2f(0.0f, 1.0f); glVertex2f(x,     y + h);
+    glEnd();
+    glBindTexture(GL_TEXTURE_2D, 0);
     glColor4f(1, 1, 1, 1);
 }
 
@@ -303,14 +323,40 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int)
     font.load("tests/font/Confale.ttf", 28.0f);
 
     // ---------------------------------------------------------
-    // Assets
+    // Loading screen assets
+    // ---------------------------------------------------------
+    enum class GameState { LOADING, PLAYING };
+    GameState gameState = GameState::LOADING;
+
+    // Stretched loading image
+    Image* loadingImage = Playlabs_LoadImage("tests/image/loading.png");
+
+    // Loading music — loops until the player proceeds
+    Sound* loadingMusic = Playlabs_CreateSound();
+    loadingMusic->load("loading.wav");
+    loadingMusic->play(true);
+
+    // Fade / prompt state
+    float loadingFade       = 1.0f;   // alpha of the loading screen overlay (1 = opaque)
+    bool  loadingFadingOut  = false;  // true once the player presses a key
+    const float FADE_SPEED  = 2.5f;  // seconds to fully fade out
+
+    // Pulse timer for the "press any key" hint text
+    float promptPulse = 0.0f;
+
+    // Track whether any key or mouse button was pressed this frame
+    bool prevAnyKeyDown = false;
+
+    // ---------------------------------------------------------
+    // Game assets (loaded upfront so they are ready when the
+    // loading screen fades out)
     // ---------------------------------------------------------
     Image* sheet = Playlabs_LoadImage("tests/anim/spritemap.png");
     Atlas* atlas = Playlabs_LoadAtlas("tests/anim/spritemap.json");
 
     Sound* bgm = Playlabs_CreateSound();
-    bgm->load("test.wav");
-    bgm->play(true);
+    bgm->load("loading.wav");
+    // BGM is NOT started here — it begins after the loading screen fades
 
     Sound* sfxJump = Playlabs_CreateSound();
     sfxJump->load("jump.wav");
@@ -360,15 +406,87 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int)
 
         Playlabs_PollInput(&win);
 
+        int sw = win.getWidth();
+        int sh = win.getHeight();
+
+        // ======================================================
+        // LOADING SCREEN
+        // ======================================================
+        if (gameState == GameState::LOADING)
+        {
+            promptPulse += dt * 3.0f;   // pulse frequency
+
+            // Detect any key or left-mouse press to begin fade-out
+            bool anyKeyDown = Playlabs_KeyDown(VK_LBUTTON) ||
+                              Playlabs_KeyDown(VK_RETURN)  ||
+                              Playlabs_KeyDown(VK_SPACE)   ||
+                              Playlabs_KeyDown(VK_ESCAPE);
+
+            bool justPressed = anyKeyDown && !prevAnyKeyDown;
+            prevAnyKeyDown   = anyKeyDown;
+
+            if (justPressed && !loadingFadingOut)
+                loadingFadingOut = true;
+
+            // Fade out
+            if (loadingFadingOut)
+            {
+                loadingFade -= dt * FADE_SPEED;
+                if (loadingFade <= 0.0f)
+                {
+                    loadingFade  = 0.0f;
+                    gameState    = GameState::PLAYING;
+
+                    // Switch music: stop loading track, start game BGM
+                    loadingMusic->stop();
+                    bgm->play(true);
+                }
+            }
+
+            // --- Render loading screen ---
+            Playlabs_Clear(0.0f, 0.0f, 0.0f, 1.0f);
+            applyScreenSpace(sw, sh);
+
+            // Stretched loading image fills the entire window
+            drawImageStretched(loadingImage, 0.0f, 0.0f,
+                               (float)sw, (float)sh, loadingFade);
+
+            // "Press any key" pulsing hint at the bottom
+            if (!loadingFadingOut)
+            {
+                float pulse = (sinf(promptPulse) * 0.5f + 0.5f); // 0..1
+                float hintA = 0.5f + pulse * 0.5f;
+
+                const char* hint    = "PRESS ANY KEY TO START";
+                float        hintX  = sw * 0.5f - strlen(hint) * 8.0f;
+                float        hintY  = sh - 48.0f;
+
+                // Semi-transparent backing pill
+                drawRect(hintX - 16.0f, hintY - 26.0f,
+                         strlen(hint) * 16.0f + 32.0f, 38.0f,
+                         0.0f, 0.0f, 0.0f, 0.55f * loadingFade);
+
+                font.draw(hint, hintX, hintY,
+                          1.0f, 1.0f, 1.0f, hintA * loadingFade);
+            }
+
+            Playlabs_Present(&win);
+            continue;   // skip game logic/render until in PLAYING state
+        }
+
+        // ======================================================
+        // GAME LOGIC (only runs once gameState == PLAYING)
+        // ======================================================
+
         // ------------------------------------------------------
         // MOUSE → world aim direction
         // ------------------------------------------------------
         int mousePixelX = 0, mousePixelY = 0;
-        Playlabs_MousePos(&mousePixelX, &mousePixelY);   // ← correct API call
+        Playlabs_MousePos(&mousePixelX, &mousePixelY);
 
         float mouseWorldX, mouseWorldY;
         screenToWorld((float)mousePixelX, (float)mousePixelY,
-                      cam, win.getWidth(), win.getHeight(),
+                      cam, sw, sh,
                       mouseWorldX, mouseWorldY);
 
         float aimDX = mouseWorldX - player.muzzleX();
@@ -392,7 +510,6 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int)
         bool justReleased = prevMouseHeld && !mouseHeld;
         prevMouseHeld     = mouseHeld;
 
-        // Accumulate charge while held (only if have ammo)
         if (mouseHeld && player.shootCooldown <= 0.0f && player.ammo > 0)
         {
             player.charging    = true;
@@ -400,7 +517,6 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int)
             if (player.chargeTimer > 1.0f) player.chargeTimer = 1.0f;
         }
 
-        // Fire on release
         if (justReleased && player.charging)
         {
             if (player.ammo > 0)
@@ -509,8 +625,8 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int)
         // ------------------------------------------------------
         // CAMERA FOLLOW
         // ------------------------------------------------------
-        float targetCamX = player.x - win.getWidth()  * 0.5f + 340.0f;
-        float targetCamY = player.y - win.getHeight() * 0.5f + 280.0f;
+        float targetCamX = player.x - sw * 0.5f + 340.0f;
+        float targetCamY = player.y - sh * 0.5f + 280.0f;
         cam.position.x  += (targetCamX - cam.position.x) * 5.0f * dt;
         cam.position.y  += (targetCamY - cam.position.y) * 5.0f * dt;
 
@@ -567,7 +683,7 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int)
         // RENDER — world
         // ==========================================================
         Playlabs_Clear(0.12f, 0.12f, 0.18f, 1.0f);
-        applyCamera2D(cam, win.getWidth(), win.getHeight());
+        applyCamera2D(cam, sw, sh);
 
         drawRect(0, player.maxY, 2000, 64, 0.25f, 0.20f, 0.15f);
 
@@ -607,7 +723,7 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int)
         // ==========================================================
         // RENDER — HUD (screen-space)
         // ==========================================================
-        applyScreenSpace(win.getWidth(), win.getHeight());
+        applyScreenSpace(sw, sh);
 
         // --- Position text ---
         char posText[64];
@@ -625,12 +741,10 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int)
             const float ammoY  = 60.0f;
             const float totalW = MAX_AMMO * (pipW + pipGap) - pipGap;
 
-            // Backing panel
             drawRect(ammoX - 4.0f, ammoY - 28.0f,
                      totalW + 8.0f, pipH + 36.0f,
                      0.0f, 0.0f, 0.0f, 0.45f);
 
-            // "AMMO" label — red when empty, white otherwise
             bool outOfAmmo = (player.ammo <= 0);
             font.draw("AMMO",
                       ammoX, ammoY - 4.0f,
@@ -639,7 +753,6 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int)
                       outOfAmmo ? 0.2f : 1.0f,
                       1.0f);
 
-            // Count  e.g. "3 / 10"
             char countBuf[16];
             snprintf(countBuf, sizeof(countBuf), "%d / %d", player.ammo, MAX_AMMO);
             font.draw(countBuf,
@@ -649,7 +762,6 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int)
                       outOfAmmo ? 0.2f : 0.9f,
                       1.0f);
 
-            // One pip per slot
             for (int i = 0; i < MAX_AMMO; ++i)
             {
                 float px = ammoX + i * (pipW + pipGap);
@@ -666,8 +778,8 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int)
         if (player.charging && player.ammo > 0)
         {
             const float barW = 200.0f;
-            float barX = (win.getWidth()  - barW) * 0.5f;
-            float barY =  win.getHeight() - 52.0f;
+            float barX = (sw - barW) * 0.5f;
+            float barY =  sh - 52.0f;
 
             float t  = player.chargeTimer;
             float pr = 0.2f + t * 0.8f;
@@ -700,6 +812,8 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int)
     Playlabs_DestroySprite(background);
     Playlabs_DestroySound(sfxJump);
     Playlabs_DestroySound(bgm);
+    Playlabs_DestroySound(loadingMusic);
+    Playlabs_FreeImage(loadingImage);
     Playlabs_FreeAtlas(atlas);
     Playlabs_FreeImage(sheet);
 
